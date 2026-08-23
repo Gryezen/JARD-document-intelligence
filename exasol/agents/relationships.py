@@ -82,6 +82,18 @@ GET_UNLINKED_CANDIDATES_SQL = """
       AND status != 'failed'
 """
 
+# Case-scoped candidate pass: documents a user explicitly grouped into the
+# same case are already a human-confirmed "these belong together" signal —
+# stronger than the vendor-name heuristic above — so every other document
+# in the case is a candidate, not just ones sharing a vendor string.
+GET_CASE_CANDIDATES_SQL = """
+    SELECT doc_id, document_type, vendor
+    FROM DOCUMENTS
+    WHERE doc_id != {doc_id}
+      AND case_id = {case_id}
+      AND status != 'failed'
+"""
+
 CHECK_EXISTING_RELATIONSHIP_SQL = """
     SELECT relationship_id FROM DOCUMENT_RELATIONSHIPS
     WHERE (doc_id_1 = {doc_a} AND doc_id_2 = {doc_b})
@@ -134,24 +146,60 @@ def _create_relationship(
     return relationship_id
 
 
+def _link_within_case(db: Database, doc_id: str, doc_type: str, case_id: str) -> list[RelationshipCandidate]:
+    candidates = db.fetchall(GET_CASE_CANDIDATES_SQL, {"doc_id": doc_id, "case_id": case_id})
+    created: list[RelationshipCandidate] = []
+    for other_id, other_type, _other_vendor in candidates:
+        if _link_exists(db, doc_id, other_id):
+            continue
+        relationship_type = _rule_based_match(doc_type, other_type) or "case_document"
+        relationship_id = _create_relationship(db, doc_id, other_id, relationship_type, confidence=1.0)
+        created.append(RelationshipCandidate(other_id, relationship_type, 1.0))
+        log_event(
+            db,
+            agent_name="relationships",
+            action="linked_documents_same_case",
+            doc_id=doc_id,
+            input_summary=f"other_doc={other_id}, case_id={case_id}, types=({doc_type},{other_type})",
+            output_summary=f"relationship_id={relationship_id}, type={relationship_type}",
+            confidence=1.0,
+        )
+    return created
+
+
 def link_document(
     db: Database,
     settings: Settings,
     doc_id: str,
     use_model_fallback: bool = True,
+    case_id: str | None = None,
 ) -> list[RelationshipCandidate]:
     """Find and persist relationships between doc_id and existing documents.
 
     Called once a document has a document_type (i.e. after extraction).
-    Rule-based matches on (document_type, vendor) run first and are free;
+
+    If case_id is given, matching is scoped to that case: every other
+    document already in the case is linked (using the rule-based label
+    when the type pair is known, otherwise a generic 'case_document'
+    label) — no vendor check and no model call needed, since being placed
+    in the same case by a person is already a stronger signal than either.
+    This is the path orchestration/workflow.py uses for the normal
+    upload-into-a-case flow.
+
+    If case_id is None, the original whole-registry behavior applies:
+    rule-based matches on (document_type, vendor) run first and are free;
     the model fallback only fires for a candidate whose type pair isn't in
     _COMPATIBLE_TYPE_PAIRS at all, and even then only checks vendor-matched
-    candidates to keep the call count bounded.
+    candidates to keep the call count bounded. Kept for callers that don't
+    have a case to scope to.
     """
     doc_rows = db.fetchall(GET_DOC_INFO_SQL, {"doc_id": doc_id})
     if not doc_rows or doc_rows[0][0] is None:
         return []  # not yet classified — nothing to link on
     doc_type, doc_vendor = doc_rows[0]
+
+    if case_id:
+        return _link_within_case(db, doc_id=doc_id, doc_type=doc_type, case_id=case_id)
 
     candidates = db.fetchall(GET_UNLINKED_CANDIDATES_SQL, {"doc_id": doc_id})
     created: list[RelationshipCandidate] = []

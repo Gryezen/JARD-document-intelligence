@@ -81,9 +81,9 @@ def load_settings() -> Settings:
             schema=os.getenv("EXASOL_SCHEMA", "DOC_INTEL"),
         ),
         llm_api_key=_require("GEMINI_API_KEY"),
-        extraction_model=os.getenv("EXTRACTION_MODEL", "gemini-2.5-flash"),
-        reasoning_model=os.getenv("REASONING_MODEL", "gemini-2.5-flash"),
-        chat_model=os.getenv("CHAT_MODEL", "gemini-2.5-flash"),
+        extraction_model=os.getenv("EXTRACTION_MODEL", "gemini-3.6-flash"),
+        reasoning_model=os.getenv("REASONING_MODEL", "gemini-3.6-flash"),
+        chat_model=os.getenv("CHAT_MODEL", "gemini-3.6-flash"),
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.8")),
         upload_dir=os.getenv("UPLOAD_DIR", "./data/uploads"),
     )

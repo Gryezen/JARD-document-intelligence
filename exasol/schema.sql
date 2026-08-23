@@ -28,12 +28,29 @@ DROP TABLE IF EXISTS DISCREPANCIES;
 DROP TABLE IF EXISTS DOCUMENT_RELATIONSHIPS;
 DROP TABLE IF EXISTS EXTRACTED_FIELDS;
 DROP TABLE IF EXISTS DOCUMENTS;
+DROP TABLE IF EXISTS CASES;
+
+-- ----------------------------------------------------------------------------
+-- CASES — a citizen/vendor's case file: the container a user explicitly
+-- groups related uploaded documents into. Cross-document reasoning (see
+-- DOCUMENT_RELATIONSHIPS / DISCREPANCIES below) is scoped to documents that
+-- share a case, not to the whole registry.
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE TABLE CASES (
+    case_id         VARCHAR(36)   NOT NULL,          -- UUID
+    name            VARCHAR(300)  NOT NULL,
+    created_by      VARCHAR(200),
+    created_at      TIMESTAMP     NOT NULL,
+    updated_at      TIMESTAMP     NOT NULL,
+    CONSTRAINT PK_CASES PRIMARY KEY (case_id)
+);
 
 -- ----------------------------------------------------------------------------
 -- DOCUMENTS — registry of every uploaded file and its processing state
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE DOCUMENTS (
     doc_id          VARCHAR(36)   NOT NULL,          -- UUID
+    case_id         VARCHAR(36),                     -- the CASES row this document was uploaded into
     filename        VARCHAR(500)  NOT NULL,
     document_type   VARCHAR(100),                    -- e.g. 'invoice', 'land_record'; NULL until classified
     vendor          VARCHAR(300),                    -- vendor/citizen/entity name if known
@@ -43,7 +60,8 @@ CREATE OR REPLACE TABLE DOCUMENTS (
     uploaded_by     VARCHAR(200),
     uploaded_at     TIMESTAMP     ,
     updated_at      TIMESTAMP     ,
-    CONSTRAINT PK_DOCUMENTS PRIMARY KEY (doc_id)
+    CONSTRAINT PK_DOCUMENTS PRIMARY KEY (doc_id),
+    CONSTRAINT FK_DOCUMENTS_CASE FOREIGN KEY (case_id) REFERENCES CASES (case_id)
 );
 
 -- ----------------------------------------------------------------------------
@@ -72,6 +90,9 @@ CREATE OR REPLACE TABLE DOCUMENT_RELATIONSHIPS (
     relationship_type   VARCHAR(100) NOT NULL,        -- e.g. 'invoice_to_po', 'income_cert_to_application'
     confidence          DECIMAL(4,3),
     created_at          TIMESTAMP    NOT NULL ,
+    compared_at         TIMESTAMP,                    -- set once reasoning has run for this pair, so a
+                                                        -- case-level re-run doesn't re-compare (and re-call
+                                                        -- the model for) a pair that already has a result
     CONSTRAINT PK_DOCUMENT_RELATIONSHIPS PRIMARY KEY (relationship_id),
     CONSTRAINT FK_DOCREL_DOC1 FOREIGN KEY (doc_id_1) REFERENCES DOCUMENTS (doc_id),
     CONSTRAINT FK_DOCREL_DOC2 FOREIGN KEY (doc_id_2) REFERENCES DOCUMENTS (doc_id)

@@ -27,7 +27,7 @@ class FakeDatabase:
 
 class FakeSettings:
     llm_api_key = "fake-key"
-    reasoning_model = "gemini-2.5-flash"
+    reasoning_model = "gemini-3.6-flash"
 
 
 @patch("agents.reasoning.call_tool")

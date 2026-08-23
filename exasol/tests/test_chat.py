@@ -32,7 +32,7 @@ class FakeReadOnlyDB:
 
 class FakeSettings:
     llm_api_key = "fake-key"
-    chat_model = "gemini-2.5-flash"
+    chat_model = "gemini-3.6-flash"
 
 
 @patch("agents.chat.call_tool")

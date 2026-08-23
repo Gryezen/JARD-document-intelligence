@@ -41,7 +41,7 @@ def test_call_tool_returns_function_args_as_plain_dict(mock_client_cls):
 
     result = call_tool(
         api_key="fake-key",
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         system_prompt="system",
         tool_name="run_query",
         tool_description="desc",
@@ -65,7 +65,7 @@ def test_call_tool_forces_the_named_function_only(mock_client_cls):
 
     call_tool(
         api_key="fake-key",
-        model="gemini-2.5-flash",
+        model="gemini-3.6-flash",
         system_prompt="system",
         tool_name="draft_action",
         tool_description="desc",
@@ -89,7 +89,7 @@ def test_call_tool_raises_when_model_returns_no_function_call(mock_client_cls):
     with pytest.raises(LLMCallError):
         call_tool(
             api_key="fake-key",
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             system_prompt="system",
             tool_name="run_query",
             tool_description="desc",
@@ -107,7 +107,7 @@ def test_call_tool_raises_on_empty_candidates(mock_client_cls):
     with pytest.raises(LLMCallError):
         call_tool(
             api_key="fake-key",
-            model="gemini-2.5-flash",
+            model="gemini-3.6-flash",
             system_prompt="system",
             tool_name="run_query",
             tool_description="desc",

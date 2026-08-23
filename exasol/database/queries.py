@@ -7,17 +7,17 @@ and agents/*.py (write paths owned by a specific agent).
 from database.db import Database
 
 GET_DOCUMENT_SQL = """
-    SELECT doc_id, filename, document_type, vendor, status, page_count, uploaded_at
+    SELECT doc_id, filename, document_type, vendor, status, page_count, uploaded_at, case_id
     FROM DOCUMENTS WHERE doc_id = {doc_id}
 """
 
 LIST_DOCUMENTS_SQL = """
-    SELECT doc_id, filename, document_type, vendor, status, uploaded_at
+    SELECT doc_id, filename, document_type, vendor, status, uploaded_at, case_id
     FROM DOCUMENTS ORDER BY uploaded_at DESC
 """
 
 GET_FIELDS_SQL = """
-    SELECT field_id, field_name, field_value AS value, confidence, source_agent
+    SELECT field_id, field_name, field_value, confidence, source_agent
     FROM EXTRACTED_FIELDS WHERE doc_id = {doc_id}
 """
 
@@ -32,7 +32,7 @@ GET_ACTIONS_FOR_DISCREPANCY_SQL = """
 """
 
 GET_AUDIT_TIMELINE_SQL = """
-    SELECT log_id, agent_name, action_name AS action, input_summary, output_summary, confidence, logged_at AS timestamp
+    SELECT log_id, agent_name, action_name, input_summary, output_summary, confidence, logged_at
     FROM AUDIT_LOG WHERE doc_id = {doc_id} ORDER BY logged_at ASC
 """
 

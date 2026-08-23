@@ -25,9 +25,9 @@ from database.db import Database
 
 INSERT_DOCUMENT_SQL = """
     INSERT INTO DOCUMENTS
-        (doc_id, filename, document_type, vendor, status, source_path, page_count, uploaded_by, uploaded_at, updated_at)
+        (doc_id, case_id, filename, document_type, vendor, status, source_path, page_count, uploaded_by, uploaded_at, updated_at)
     VALUES
-        ({doc_id}, {filename}, {document_type}, {vendor}, {status}, {source_path}, {page_count!d}, {uploaded_by}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        ({doc_id}, {case_id}, {filename}, {document_type}, {vendor}, {status}, {source_path}, {page_count!d}, {uploaded_by}, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
 
 # Below this average Tesseract word-confidence, the scan is flagged in the
@@ -98,12 +98,16 @@ def ingest_document(
     uploaded_by: str | None = None,
     document_type: str | None = None,
     vendor: str | None = None,
+    case_id: str | None = None,
 ) -> IngestionResult:
     """Normalize a file into text and register it in DOCUMENTS.
 
     document_type/vendor can be passed in if already known (e.g. the user
     picked "invoice" on upload); otherwise leave None for the extraction
-    agent to fill in.
+    agent to fill in. case_id ties this document to the case (see
+    database/cases.py) it was uploaded into — cross-document reasoning is
+    scoped to documents sharing a case, so this is what makes that scoping
+    possible downstream in agents/relationships.py.
     """
     path = Path(file_path)
     if not path.exists():
@@ -130,6 +134,7 @@ def ingest_document(
         INSERT_DOCUMENT_SQL,
         {
             "doc_id": doc_id,
+            "case_id": case_id,
             "filename": filename,
             "document_type": document_type,
             "vendor": vendor,

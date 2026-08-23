@@ -28,7 +28,7 @@ class FakeDatabase:
 
 class FakeSettings:
     llm_api_key = "fake-key"
-    extraction_model = "gemini-2.5-flash"
+    extraction_model = "gemini-3.6-flash"
 
 
 @patch("agents.extraction.call_tool")
@@ -77,5 +77,5 @@ def test_extract_fields_passes_document_text_to_model(mock_call_tool):
     _, kwargs = mock_call_tool.call_args
     assert "the quick brown fox" in kwargs["user_content"]
     assert kwargs["tool_name"] == "record_extracted_fields"
-    assert kwargs["model"] == "gemini-2.5-flash"
+    assert kwargs["model"] == "gemini-3.6-flash"
     assert kwargs["api_key"] == "fake-key"

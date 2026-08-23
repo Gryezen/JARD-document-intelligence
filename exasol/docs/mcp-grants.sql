@@ -14,10 +14,12 @@
 
 -- If the starter kit did not already create this user for its MCP server,
 -- create a dedicated one for this project instead of reusing SYS anywhere
--- near query execution:
--- CREATE USER DOC_INTEL_RO IDENTIFIED BY "<set via EXASOL_RO_PASSWORD env>";
+-- near query execution. Match the username to EXASOL_RO_USER in your .env,
+-- and pick a real password (matching EXASOL_RO_PASSWORD) instead of the
+-- placeholder below:
+-- CREATE USER DOC_INTEL_RO IDENTIFIED BY "change-me-and-set-EXASOL_RO_PASSWORD";
 
-GRANT SELECT ON SCHEMA DOC_INTEL TO DOC_INTEL_RO;
+GRANT SELECT ON SCHEMA DOC_INTEL TO mcp_readonly;
 
 -- Explicitly withheld (documented for judges/auditors, not because Exasol
 -- would grant these by default): INSERT, UPDATE, DELETE, DROP, ALTER on

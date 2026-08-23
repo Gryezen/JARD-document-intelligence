@@ -80,6 +80,22 @@ exapump sql -p starter-kit -f schema.sql
 exapump sql -p starter-kit -f docs/mcp-grants.sql
 ```
 
+`exapump`'s flags have changed across versions — if `-f` isn't recognized as
+"file" on your install (run `exapump sql --help` to check), use the
+CLI-agnostic fallback instead, which connects with the same credentials
+your `.env` already has configured:
+
+```bash
+python scripts/apply_schema.py schema.sql
+python scripts/apply_schema.py docs/mcp-grants.sql
+```
+
+Re-run this (either way) any time `schema.sql` changes — it uses
+`CREATE OR REPLACE TABLE` / `DROP TABLE IF EXISTS`, so applying it wipes
+existing rows in `DOC_INTEL`. If you see `object CASES not found` or
+`object CASE_ID not found` errors from the API, that means the schema
+hasn't been re-applied since it last changed.
+
 ### 3. Configure the app
 
 ```bash
@@ -153,8 +169,8 @@ nothing separate to start for the frontend.
 - `agents/relationships.py` — links documents into the same case: a free deterministic rule pass (same vendor + a known compatible type pair, e.g. invoice↔purchase_order) runs first, with a bounded Gemini fallback only for vendor-matched pairs whose document types aren't in the known list yet
 - `orchestration/workflow.py` — drives `ingest → extract → link relationships → confidence gate` and, separately, `reasoning → action → complete` for a document once unblocked
 - `api/routes.py` — Flask endpoints for upload, documents, fields, discrepancies, audit timeline, review submission, action approval, and chat. `/api/documents/upload` runs the full ingest→extract→link→gate pipeline synchronously so a demo shows real processing, not a spinner
-- `frontend/` — single-page vanilla HTML/JS/CSS dashboard served by Flask itself (`api/routes.py` mounts it as static root) — upload, per-document fields/case-file/discrepancies/audit tabs, and a natural-language chat dock, all against the real API
-- `tests/` — 53 passing unit tests covering the confidence gate, state-machine transitions, SQL validation, relationship rule-matching (and its Gemini fallback), OCR/PDF/plain-text ingestion, extraction/reasoning/action/chat agent call sites, and the shared `agents/llm_client.py` wrapper (all run without a live Exasol connection or API key; mocked at the `call_tool` boundary using real `google.genai.types` objects, and the OCR tests generate real image/PDF fixtures on the fly and run actual Tesseract on them)
+- `frontend/` — single-page HTML/JS/CSS app served by Flask itself (`api/routes.py` mounts it as static root): a marketing landing page plus a signed-in dashboard (documents, case comparison, review queue, discrepancies, proposed actions, audit log, NL chat) wired against the real API — sign-in itself is local-only (`localStorage`), everything past it is live
+- `tests/` — 57 passing unit tests covering the confidence gate, state-machine transitions, SQL validation, relationship rule-matching (and its Gemini fallback), OCR/PDF/plain-text ingestion, extraction/reasoning/action/chat agent call sites, the shared `agents/llm_client.py` wrapper, and that every `api/routes.py` endpoint returns a JSON error (not a bare 500) when the agent it calls fails (all run without a live Exasol connection or API key; mocked at the `call_tool` boundary using real `google.genai.types` objects, and the OCR tests generate real image/PDF fixtures on the fly and run actual Tesseract on them)
 
 ## Sample data
 

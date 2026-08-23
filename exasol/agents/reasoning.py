@@ -72,7 +72,7 @@ INSERT_DISCREPANCY_SQL = """
 """
 
 GET_FIELDS_SQL = """
-    SELECT field_name, field_value AS value, confidence
+    SELECT field_name, field_value, confidence
     FROM EXTRACTED_FIELDS
     WHERE doc_id = {doc_id}
 """

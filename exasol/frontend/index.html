@@ -689,11 +689,23 @@ body{font-family:"Inter","Avenir Next","Segoe UI",system-ui,sans-serif}
 .kb-search input{flex:1;padding:12px 14px;border:1px solid #29353f;border-radius:6px;background:#0e161d;color:#edf1f3;font-size:14px}
 .kb-sources{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
 .kb-source{border:1px solid #29353f;border-radius:5px;padding:6px 10px;font-size:11.5px;color:#9ca8b1;font-family:ui-monospace,SFMono-Regular,monospace}
-.dropzone{border:2px dashed var(--line);border-radius:8px;padding:22px;text-align:center;color:var(--muted);cursor:pointer;transition:border-color .15s ease,background .15s ease;margin-bottom:16px}
+.dropzone{display:block;border:2px dashed var(--line);border-radius:8px;padding:22px;text-align:center;color:var(--muted);cursor:pointer;transition:border-color .15s ease,background .15s ease;margin-bottom:16px}
 .dropzone:hover,.dropzone.drag{border-color:var(--blue);background:var(--blue2);color:var(--ink)}
 .dropzone input{display:none}
 .dropzone .hint{display:block;margin-top:4px;font-size:11.5px;color:var(--muted)}
 .upload-status{font-size:12.5px;color:var(--muted);margin:-6px 0 16px}
+.upload-list{display:flex;flex-direction:column;gap:10px;margin:-6px 0 16px}
+.upload-row{display:flex;flex-direction:column;gap:5px}
+.upload-row-name{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:var(--ink)}
+.upload-row-status{color:var(--muted);font-weight:500;white-space:nowrap}
+.upload-row-status.error{color:var(--red)}
+.upload-row-status.done{color:var(--green)}
+.upload-bar{height:5px;border-radius:3px;background:var(--surface2,var(--line));overflow:hidden}
+.upload-bar-fill{height:100%;width:0;border-radius:3px;background:var(--blue);transition:width .2s ease,background-color .2s ease}
+.upload-bar-fill.indeterminate{background-image:linear-gradient(90deg,var(--blue) 0%,var(--blue2) 50%,var(--blue) 100%);background-size:200% 100%;animation:uploadPulse 1.1s ease-in-out infinite}
+.upload-bar-fill.done{background:var(--green)}
+.upload-bar-fill.error{background:var(--red)}
+@keyframes uploadPulse{0%{background-position:0% 0}100%{background-position:-200% 0}}
 .field-row{display:grid;grid-template-columns:1fr auto;gap:8px;padding:11px 0;border-bottom:1px solid var(--line)}
 .field-row:last-child{border:0}
 .queue-item{display:flex;justify-content:space-between;align-items:center;padding:11px 16px;border-bottom:1px solid var(--line);cursor:pointer}
@@ -1242,8 +1254,8 @@ Chat identity   → read-only access → SELECT-only queries</div></div></div></
     <div class="sidegroup">Pipeline</div>
     <button class="sidebtn active" data-page="dashboard" onclick="show('dashboard')"><span class="si">◆</span><span class="label">Dashboard</span></button>
     <button class="sidebtn" data-page="documents" onclick="show('documents')"><span class="si">01</span><span class="label">Documents</span></button>
-    <button class="sidebtn" data-page="cases" onclick="show('cases')"><span class="si">02</span><span class="label">Cases</span></button>
-    <button class="sidebtn" data-page="review" onclick="show('review')"><span class="si">03</span><span class="label">Review Queue</span></button>
+    <button class="sidebtn" data-page="review" onclick="show('review')"><span class="si">02</span><span class="label">Review Queue</span></button>
+    <button class="sidebtn" data-page="cases" onclick="show('cases')"><span class="si">03</span><span class="label">Cases</span></button>
     <div class="sidegroup">Oversight</div>
     <button class="sidebtn" data-page="discrepancies" onclick="show('discrepancies')"><span class="si">04</span><span class="label">Discrepancies</span></button>
     <button class="sidebtn" data-page="actions" onclick="show('actions')"><span class="si">05</span><span class="label">Actions</span></button>
@@ -1298,7 +1310,7 @@ Chat identity   → read-only access → SELECT-only queries</div></div></div></
         <label>Password</label><input id="password" type="password" autocomplete="current-password" placeholder="Enter password" required minlength="6">
         <button class="btn primary" style="width:100%;margin-top:20px" id="authSubmit">Sign In</button>
       </form>
-      <div id="authNote" class="small muted" style="margin-top:14px">Prototype access · authentication is currently UI-only.</div>
+      <div id="authNote" class="small muted" style="margin-top:14px">Sign-in is local to this browser only — documents, cases, reviews and actions inside are live against the real backend.</div>
     </div>
   </div>
 </div>
@@ -1352,7 +1364,8 @@ function confBar(v){
    any write (upload, review, decide) via loadSnapshot(true).
    ===================================================================================== */
 let SNAPSHOT = null;
-let ACTIVE_DOC_ID = null;   // last-opened case/document, used by cases()/review()/audit() when no id is passed
+let ACTIVE_DOC_ID = null;   // last-opened document, used by review()/audit() when no id is passed
+let ACTIVE_CASE_ID = null;  // last-opened case, used by casedetail() when no id is passed
 
 async function apiGet(path){
   const res = await fetch(path);
@@ -1390,6 +1403,14 @@ function statusBadge(status){
   const [cls,label] = map[status] || ['neutral', status || 'Unknown'];
   return `<span class="badge ${cls}">${label}</span>`;
 }
+function caseStatusBadge(status){
+  const map = {
+    empty:['neutral','Empty'], processing:['info','Processing'],
+    needs_review:['warn','Needs Review'], failed:['bad','Failed'], complete:['ok','Complete'],
+  };
+  const [cls,label] = map[status] || ['neutral', status || 'Unknown'];
+  return `<span class="badge ${cls}">${label}</span>`;
+}
 function avgConfidence(fields){
   const withConf = (fields||[]).filter(f=>f.confidence!=null);
   if(!withConf.length) return null;
@@ -1398,7 +1419,8 @@ function avgConfidence(fields){
 
 async function loadSnapshot(force=false){
   if(SNAPSHOT && !force) return SNAPSHOT;
-  const [documents, config] = await Promise.all([apiGet('/api/documents'), apiGet('/api/config')]);
+  const [documents, config, cases] = await Promise.all([apiGet('/api/documents'), apiGet('/api/config'), apiGet('/api/cases').catch(()=>[])]);
+  const casesById = Object.fromEntries(cases.map(c => [c.case_id, c]));
   const perDoc = await Promise.all(documents.map(async d => {
     const [fields, discrepancies, actions] = await Promise.all([
       apiGet(`/api/documents/${d.doc_id}/fields`).catch(()=>[]),
@@ -1424,13 +1446,14 @@ async function loadSnapshot(force=false){
     else if(linked.length) derived = 'review';
     return {...d, derived_status: derived};
   });
-  SNAPSHOT = {documents, threshold: config.confidence_threshold, fieldsByDoc, discrepancies, actions};
+  SNAPSHOT = {documents, threshold: config.confidence_threshold, fieldsByDoc, discrepancies, actions, cases, casesById};
   return SNAPSHOT;
 }
 
 /* ---- page shell / routing ---- */
 async function show(page, opts={}){
-  document.querySelectorAll('.sidebtn[data-page]').forEach(b=>b.classList.toggle('active', b.dataset.page===page));
+  const activeGroup = page === 'casedetail' ? 'cases' : page;
+  document.querySelectorAll('.sidebtn[data-page]').forEach(b=>b.classList.toggle('active', b.dataset.page===activeGroup));
   const main = document.getElementById('main');
   main.classList.remove('page-enter');
   main.innerHTML = '<div class="skeleton">Loading…</div>';
@@ -1443,7 +1466,16 @@ async function show(page, opts={}){
   main.classList.add('page-enter');
   window.scrollTo(0,0);
 }
-function openCase(docId){ ACTIVE_DOC_ID = docId; show('cases'); }
+async function openCase(docId){
+  // "Case" here means the case a document belongs to, not the document
+  // itself — every document belongs to exactly one case (see
+  // database/cases.py), so opening a document always means opening its case.
+  const s = await loadSnapshot();
+  const doc = s.documents.find(d => d.doc_id === docId);
+  if(doc && doc.case_id){ ACTIVE_CASE_ID = doc.case_id; show('casedetail'); }
+  else { show('documents'); }
+}
+function openCaseDetail(caseId){ ACTIVE_CASE_ID = caseId; show('casedetail'); }
 function openReview(docId){ ACTIVE_DOC_ID = docId; show('review'); }
 function openAudit(docId){ ACTIVE_DOC_ID = docId; show('audit'); }
 function openApp(){
@@ -1451,6 +1483,18 @@ function openApp(){
   document.getElementById('landing').style.display='none';document.getElementById('app').style.display='block';show('dashboard');refreshAccount()
 }
 function closeApp(){document.getElementById('app').style.display='none';document.getElementById('landing').style.display='block';window.scrollTo(0,0)}
+function bootApp(){
+  // Sessions are just a localStorage flag (see submitAuth below), so if one
+  // is already present on page load — e.g. after a refresh — walk straight
+  // into the app instead of leaving the person stuck on the landing page
+  // needing to click Sign In again for a session that's already active.
+  if(localStorage.getItem('jardSession')){
+    document.getElementById('landing').style.display='none';
+    document.getElementById('app').style.display='block';
+    show('dashboard');
+    refreshAccount();
+  }
+}
 
 const PAGES = {
 
@@ -1509,8 +1553,12 @@ documents: async () => {
     const btn = d.status === 'review'
       ? `<button class="btn sm" onclick="openReview('${d.doc_id}')">Review</button>`
       : `<button class="btn sm" onclick="openCase('${d.doc_id}')">View</button>`;
+    const kase = d.case_id && s.casesById[d.case_id];
+    const caseCell = kase
+      ? `<a class="text-link" style="border:0" onclick="openCaseDetail('${kase.case_id}')">${escapeHtml(kase.name)}</a>`
+      : '<span class="muted">—</span>';
     return `<tr><td><b>${escapeHtml(d.filename)}</b></td><td>${escapeHtml(d.document_type||'—')}</td>
-      <td>${caseLabel(d.doc_id)}</td><td>${statusBadge(d.status)}</td>
+      <td>${caseCell}</td><td>${statusBadge(d.status)}</td>
       <td>${conf!=null ? confBar(conf) : '<span class="muted small">—</span>'}</td>
       <td>${timeAgo(d.uploaded_at)}</td><td>${btn}</td></tr>`;
   }).join('');
@@ -1518,11 +1566,17 @@ documents: async () => {
   return `
 <div class="pagehead"><div><div class="eyebrow">Workspace</div><h1>Documents</h1><div class="muted">Find, inspect and route processed documents.</div></div></div>
 ${stageTracker('extract')}
+<div class="toolbar" style="margin-bottom:10px">
+  <select id="caseSelect" title="Which case new uploads join">
+    <option value="">Upload to a new case</option>
+    ${s.cases.map(c=>`<option value="${c.case_id}">Add to: ${escapeHtml(c.name)}</option>`).join('')}
+  </select>
+</div>
 <label class="dropzone" id="dropzone">
   <input type="file" id="fileInput" accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.txt" multiple>
-  <div>Drop scanned certificates, forms or receipts — or click to upload<span class="hint">Multiple files supported</span></div>
+  <div>Drop scanned certificates, forms or receipts — or click to upload<span class="hint">Pick a case above to add to it, or leave "a new case" to start one</span></div>
 </label>
-<div class="upload-status" id="uploadStatus"></div>
+<div class="upload-list" id="uploadList"></div>
 <div class="toolbar">
   <input placeholder="Search documents…" oninput="filterDocs(this.value)">
   <select><option>All statuses</option><option>Processed</option><option>Review Required</option></select>
@@ -1539,14 +1593,37 @@ ${rows || '<tr><td colspan="7" class="empty">No documents yet — drop a file ab
 
 cases: async () => {
   const s = await loadSnapshot();
-  const docId = ACTIVE_DOC_ID || (s.documents[0] && s.documents[0].doc_id);
-  if(!docId) return `<div class="pagehead"><div><div class="eyebrow">Case detail</div><h1>Cases</h1></div></div><div class="empty">No documents uploaded yet. <a class="text-link" style="border:0" onclick="show('documents')">Go to Documents →</a></div>`;
+  const rows = [...s.cases].map(c => {
+    return `<tr><td><b><a class="text-link" style="border:0" onclick="openCaseDetail('${c.case_id}')">${escapeHtml(c.name)}</a></b></td>
+      <td>${c.document_count} document${c.document_count===1?'':'s'}</td>
+      <td>${caseStatusBadge(c.status)}</td>
+      <td>${timeAgo(c.updated_at)}</td>
+      <td><button class="btn sm" onclick="openCaseDetail('${c.case_id}')">Open</button></td></tr>`;
+  }).join('');
 
-  const doc = s.documents.find(d=>d.doc_id===docId);
-  const related = await apiGet(`/api/documents/${docId}/related`).catch(()=>[]);
-  const discs = s.discrepancies.filter(d=>d.doc_id_1===docId || d.doc_id_2===docId);
-  const allDocs = [doc, ...related.map(r=>({doc_id:r.doc_id, filename:r.filename}))].filter(Boolean);
-  const fieldSets = await Promise.all(allDocs.map(d => s.fieldsByDoc[d.doc_id] ? Promise.resolve(s.fieldsByDoc[d.doc_id]) : apiGet(`/api/documents/${d.doc_id}/fields`).catch(()=>[])));
+  return `
+<div class="pagehead"><div><div class="eyebrow">Workspace</div><h1>Cases</h1><div class="muted">A case is a folder for one person or vendor's documents — cross-document comparison runs within a case.</div></div>
+<div style="display:flex;gap:8px"><button class="btn" onclick="createCasePrompt()">+ New case</button><button class="btn primary" onclick="show('documents')">Upload documents</button></div></div>
+${stageTracker('compare')}
+<div class="panel"><div class="panelhead"><h3>Your cases</h3><span class="small muted">${s.cases.length} case${s.cases.length===1?'':'s'}</span></div>
+<div class="tablewrap"><table>
+<tr><th>Case</th><th>Documents</th><th>Status</th><th>Updated</th><th></th></tr>
+${rows || '<tr><td colspan="5" class="empty">No cases yet — create one, or upload documents on the Documents page to start one automatically.</td></tr>'}
+</table></div></div>
+`;
+},
+
+casedetail: async () => {
+  const caseId = ACTIVE_CASE_ID;
+  if(!caseId) return `<div class="pagehead"><div><div class="eyebrow">Case detail</div><h1>Cases</h1></div></div><div class="empty">No case selected. <a class="text-link" style="border:0" onclick="show('cases')">Go to Cases →</a></div>`;
+
+  const kase = await apiGet(`/api/cases/${caseId}`).catch(()=>null);
+  if(!kase) return `<div class="pagehead"><div><div class="eyebrow">Case detail</div><h1>Cases</h1></div></div><div class="empty">Couldn't load this case — it may have been deleted. <a class="text-link" style="border:0" onclick="show('cases')">Go to Cases →</a></div>`;
+
+  const s = await loadSnapshot();
+  const docs = kase.documents || [];
+  const fieldSets = await Promise.all(docs.map(d => s.fieldsByDoc[d.doc_id] ? Promise.resolve(s.fieldsByDoc[d.doc_id]) : apiGet(`/api/documents/${d.doc_id}/fields`).catch(()=>[])));
+  const discs = s.discrepancies.filter(d => docs.some(x=>x.doc_id===d.doc_id_1) || docs.some(x=>x.doc_id===d.doc_id_2));
 
   const fieldNames = [...new Set(fieldSets.flatMap(fs => fs.map(f=>f.field_name)))];
   const compareRows = fieldNames.map(name => {
@@ -1556,23 +1633,50 @@ cases: async () => {
     return `<tr><td>${escapeHtml(name)}</td>${cells.map(c=>`<td class="${hasMismatch?'discrepancy':'match'}">${c ? escapeHtml(c.value ?? '—') : '<span class="muted">—</span>'}</td>`).join('')}<td>${hasMismatch?'<span class="badge bad">Discrepancy</span>':'<span class="badge ok">Match</span>'}</td></tr>`;
   }).join('');
 
-  const canRunComparison = doc && doc.status === 'reasoning';
+  const docCards = docs.map((d,i) => {
+    const fields = fieldSets[i] || [];
+    return `
+<div class="panel">
+  <div class="panelhead">
+    <h3>${escapeHtml(d.filename)}</h3>
+    <div style="display:flex;gap:8px;align-items:center">
+      ${statusBadge(d.status)}
+      ${d.status==='review' ? `<button class="btn sm" onclick="openReview('${d.doc_id}')">Review</button>` : ''}
+      <button class="btn sm" onclick="openAudit('${d.doc_id}')">Audit</button>
+      <button class="btn sm danger" onclick="removeCaseDocument('${caseId}','${d.doc_id}')">Remove</button>
+    </div>
+  </div>
+  <div class="tablewrap"><table>
+  <tr><th>Field</th><th>Value</th><th>Confidence</th></tr>
+  ${fields.length ? fields.map(f=>`<tr><td>${escapeHtml(f.field_name)}</td><td>${escapeHtml(f.value ?? '—')}</td><td>${f.confidence!=null ? confBar(Number(f.confidence)) : '<span class="muted small">—</span>'}</td></tr>`).join('') : '<tr><td colspan="3" class="empty">No extracted fields yet.</td></tr>'}
+  </table></div>
+</div>`;
+  }).join('');
 
   return `
-<div class="pagehead"><div><div class="eyebrow">Case detail</div><h1>${caseLabel(docId)}</h1><div class="muted">${escapeHtml(doc?.vendor||'—')} · ${escapeHtml(doc?.filename||'')}</div></div>
-${canRunComparison ? `<button class="btn primary" onclick="runComparison('${docId}')">Run comparison</button>` : ''}</div>
-${stageTracker('compare')}
-<div class="panel"><div class="panelhead"><h3>Linked Documents</h3></div>
-<div class="linked-docs">
-  ${allDocs.length ? allDocs.map(d=>`<div class="linked-doc">${escapeHtml(d.filename)}</div>`).join('') : '<div class="small muted" style="padding:4px 0">No linked documents.</div>'}
-</div></div>
-<div class="panel"><div class="panelhead"><h3>Cross-Document Comparison</h3>${discs.length ? `<span class="badge bad">${discs.length} discrepanc${discs.length===1?'y':'ies'}</span>` : '<span class="badge ok">No discrepancies</span>'}</div>
-${allDocs.length > 1 ? `<div class="tablewrap"><table class="compare-table">
-<tr><th>Field</th>${allDocs.map(d=>`<th>${escapeHtml(d.filename)}</th>`).join('')}<th>Result</th></tr>
-${compareRows || `<tr><td colspan="${allDocs.length+2}" class="empty">No extracted fields to compare yet.</td></tr>`}
-</table></div>` : `<div class="empty">This document has no linked documents to compare against yet.</div>`}
+<div class="pagehead">
+  <div><div class="eyebrow">Case detail</div><h1>${escapeHtml(kase.name)}</h1><div class="muted">${docs.length} document${docs.length===1?'':'s'} · Updated ${timeAgo(kase.updated_at)}</div></div>
+  <div style="display:flex;gap:8px">
+    <button class="btn" onclick="renameCasePrompt('${caseId}')">Rename</button>
+    ${docs.length > 1 ? `<button class="btn primary" onclick="runCaseComparison('${caseId}')">Run comparison</button>` : ''}
+    <button class="btn danger" onclick="deleteCasePrompt('${caseId}')">Delete case</button>
+  </div>
 </div>
+${stageTracker('compare')}
+<label class="dropzone" id="caseDropzone">
+  <input type="file" id="caseFileInput" accept=".pdf,.png,.jpg,.jpeg,.tiff,.bmp,.txt" multiple>
+  <div>Add another file to this case<span class="hint">Multiple files supported</span></div>
+</label>
+<div class="upload-list" id="caseUploadList"></div>
+${docCards || '<div class="empty">No documents in this case yet — add one above.</div>'}
+${docs.length > 1 ? `
+<div class="panel"><div class="panelhead"><h3>Cross-Document Comparison</h3>${discs.length ? `<span class="badge bad">${discs.length} discrepanc${discs.length===1?'y':'ies'}</span>` : '<span class="badge ok">No discrepancies</span>'}</div>
+<div class="tablewrap"><table class="compare-table">
+<tr><th>Field</th>${docs.map(d=>`<th>${escapeHtml(d.filename)}</th>`).join('')}<th>Result</th></tr>
+${compareRows || `<tr><td colspan="${docs.length+2}" class="empty">No extracted fields to compare yet.</td></tr>`}
+</table></div></div>
 ${discs.length ? `<div style="display:flex;justify-content:flex-end"><button class="btn primary" onclick="show('actions')">Review proposed action →</button></div>` : ''}
+` : ''}
 `;
 },
 
@@ -1714,67 +1818,182 @@ knowledge: async () => `
 /* ---- Documents: search + upload ---- */
 function filterDocs(q){document.querySelectorAll('#docTable tr').forEach((r,i)=>{if(i===0)return;r.style.display=r.innerText.toLowerCase().includes(q.toLowerCase())?'':'none'})}
 
-document.addEventListener('change', e => { if(e.target && e.target.id==='fileInput' && e.target.files.length) uploadFiles(Array.from(e.target.files)); });
-document.addEventListener('dragover', e => { const z=e.target.closest && e.target.closest('#dropzone'); if(z){ e.preventDefault(); z.classList.add('drag'); } });
-document.addEventListener('dragleave', e => { const z=e.target.closest && e.target.closest('#dropzone'); if(z) z.classList.remove('drag'); });
+document.addEventListener('change', e => {
+  if(!(e.target && e.target.files && e.target.files.length)) return;
+  if(e.target.id==='fileInput'){
+    const sel = document.getElementById('caseSelect');
+    uploadFiles(Array.from(e.target.files), sel && sel.value ? sel.value : null, 'uploadList');
+  }else if(e.target.id==='caseFileInput'){
+    uploadFiles(Array.from(e.target.files), ACTIVE_CASE_ID, 'caseUploadList');
+  }
+});
+document.addEventListener('dragover', e => { const z=e.target.closest && e.target.closest('.dropzone'); if(z){ e.preventDefault(); z.classList.add('drag'); } });
+document.addEventListener('dragleave', e => { const z=e.target.closest && e.target.closest('.dropzone'); if(z) z.classList.remove('drag'); });
 document.addEventListener('drop', e => {
-  const z = e.target.closest && e.target.closest('#dropzone');
+  const z = e.target.closest && e.target.closest('.dropzone');
   if(!z) return;
   e.preventDefault(); z.classList.remove('drag');
   const files = Array.from(e.dataTransfer.files||[]);
-  if(files.length) uploadFiles(files);
+  if(!files.length) return;
+  if(z.id==='caseDropzone') uploadFiles(files, ACTIVE_CASE_ID, 'caseUploadList');
+  else{
+    const sel = document.getElementById('caseSelect');
+    uploadFiles(files, sel && sel.value ? sel.value : null, 'uploadList');
+  }
 });
 
-async function uploadFiles(files){
-  const status = document.getElementById('uploadStatus');
-  let okCount = 0, lastDocId = null, lastNote = '';
+// XMLHttpRequest instead of fetch so we get real upload.onprogress events —
+// fetch has no cross-browser upload-progress hook. onProgress receives a
+// 0..1 fraction of bytes sent; it stops advancing once the browser has
+// flushed the body, while the server still runs ingestion/extraction/gate
+// synchronously before responding (see api/routes.py:upload_document), so
+// callers cap the bar below 100% until the promise actually resolves.
+function xhrUpload(url, formData, onProgress){
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.upload.onprogress = e => { if(e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onload = () => {
+      let body = {};
+      try{ body = JSON.parse(xhr.responseText); }catch(e){}
+      if(xhr.status >= 200 && xhr.status < 300) resolve(body);
+      else reject(new Error(body.error || `upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error('network error'));
+    xhr.send(formData);
+  });
+}
+function renderUploadList(containerId, files){
+  const el = document.getElementById(containerId);
+  if(!el) return;
+  el.innerHTML = files.map((f,i) => `
+    <div class="upload-row">
+      <div class="upload-row-name"><span>${escapeHtml(f.name)}</span><span class="upload-row-status" id="${containerId}-status-${i}">queued</span></div>
+      <div class="upload-bar"><div class="upload-bar-fill" id="${containerId}-fill-${i}"></div></div>
+    </div>`).join('');
+}
+function setUploadProgress(containerId, i, pct, statusText, state){
+  const fill = document.getElementById(`${containerId}-fill-${i}`);
+  const status = document.getElementById(`${containerId}-status-${i}`);
+  if(fill){
+    fill.style.width = `${pct}%`;
+    fill.classList.toggle('indeterminate', state==='processing');
+    fill.classList.toggle('done', state==='done');
+    fill.classList.toggle('error', state==='error');
+  }
+  if(status){ status.textContent = statusText; status.className = `upload-row-status ${state==='error'?'error':state==='done'?'done':''}`; }
+}
+
+async function uploadFiles(files, caseId=null, containerId='uploadList'){
+  // A batch of files dropped together becomes one case: the first upload in
+  // the batch creates it (unless caseId is already set — an existing case
+  // picked from the Documents page selector, or the case currently open on
+  // its own detail page), and every subsequent file in the same batch is
+  // attached to that same case. See database/cases.py and
+  // api/routes.py:upload_document.
+  renderUploadList(containerId, files);
+  let okCount = 0, resolvedCaseId = caseId, lastNote = '';
   for(let i=0;i<files.length;i++){
     const file = files[i];
-    if(status) status.textContent = files.length>1 ? `ingesting ${file.name} (${i+1} of ${files.length})…` : `ingesting ${file.name}…`;
+    setUploadProgress(containerId, i, 0, 'uploading…', 'uploading');
     const form = new FormData();
     form.append('file', file);
     form.append('uploaded_by', currentUser());
+    if(resolvedCaseId) form.append('case_id', resolvedCaseId);
     try{
-      const res = await fetch('/api/documents/upload', {method:'POST', body: form});
-      const result = await res.json();
-      if(!res.ok) throw new Error(result.error || 'upload failed');
-      lastDocId = result.doc_id;
+      const result = await xhrUpload('/api/documents/upload', form, frac => {
+        // Cap at 92% for the byte-transfer phase — the server still has to
+        // run ingestion/extraction/gate before it responds, so jumping to
+        // 100% here would be a lie about what's actually finished.
+        const pct = Math.min(92, Math.round(frac * 92));
+        setUploadProgress(containerId, i, pct, pct >= 92 ? 'processing…' : 'uploading…', pct >= 92 ? 'processing' : 'uploading');
+      });
+      setUploadProgress(containerId, i, 100, 'done', 'done');
+      resolvedCaseId = result.case_id;
       okCount++;
-      // Auto-approved docs sit in 'reasoning' — run the compare+action-draft step now
-      // so the pipeline actually completes instead of stalling until someone visits Cases.
-      if(result.gate_decision === 'AUTO_APPROVE'){
-        try{
-          await apiPost(`/api/documents/${result.doc_id}/process`);
-        }catch(e){
-          lastNote = ` — comparison step failed (${e.message}); retry from the Case page`;
-        }
-      }
     }catch(e){
-      if(status) status.textContent = `${file.name} failed: ${e.message}`;
-      if(files.length===1) return;
+      setUploadProgress(containerId, i, 100, `failed: ${e.message}`, 'error');
+      lastNote += ` — ${file.name} failed (${e.message})`;
       continue;
     }
   }
-  const fileInput = document.getElementById('fileInput');
-  if(fileInput) fileInput.value = '';
-  await loadSnapshot(true);
-  const finalMsg = (files.length>1 ? `done — ${okCount} of ${files.length} file(s) ingested` : `done — ${files[0].name} ingested`) + lastNote;
-  if(lastNote){
-    // Stay put so the failure note is actually visible instead of being wiped by navigation.
-    show('documents').then(() => { const s = document.getElementById('uploadStatus'); if(s) s.textContent = finalMsg; });
-  }else if(lastDocId){
-    openCase(lastDocId);
-  }else{
-    show('documents');
+  const fi = document.getElementById(containerId==='caseUploadList' ? 'caseFileInput' : 'fileInput');
+  if(fi) fi.value = '';
+
+  // Compare the whole case now that every file in this batch is ingested,
+  // instead of comparing per document — a document that finished first
+  // would otherwise never learn about a case-mate uploaded a moment later
+  // (see orchestration/workflow.compare_case's docstring).
+  if(resolvedCaseId && okCount){
+    try{ await apiPost(`/api/cases/${resolvedCaseId}/process`); }
+    catch(e){ lastNote += ` — comparison step failed (${e.message}); retry with "Run comparison" on the case page`; }
   }
+
+  await loadSnapshot(true);
+  if(resolvedCaseId && okCount){
+    ACTIVE_CASE_ID = resolvedCaseId;
+    await show('casedetail');
+    if(lastNote){ const s = document.getElementById('caseUploadList'); if(s) s.insertAdjacentHTML('afterend', `<div class="upload-status">${escapeHtml(lastNote.replace(/^ — /,''))}</div>`); }
+  }
+  // else: nothing succeeded — stay put so the per-file error state in the
+  // list (rendered above) stays visible instead of being wiped by a nav.
 }
 
-async function runComparison(docId){
+async function runCaseComparison(caseId){
   try{
-    await apiPost(`/api/documents/${docId}/process`);
+    await apiPost(`/api/cases/${caseId}/process`);
+    await loadSnapshot(true);
+    show('casedetail');
+  }catch(e){ alert(`Comparison failed: ${e.message}`); }
+}
+
+async function createCasePrompt(){
+  const name = prompt("Name this case (e.g. the person or vendor it's for)");
+  if(name===null) return;
+  const trimmed = name.trim();
+  if(!trimmed) return;
+  try{
+    const result = await apiPost('/api/cases', {name: trimmed});
+    await loadSnapshot(true);
+    openCaseDetail(result.case_id);
+  }catch(e){ alert(`Couldn't create case: ${e.message}`); }
+}
+
+async function renameCasePrompt(caseId){
+  const s = await loadSnapshot();
+  const current = (s.casesById[caseId] && s.casesById[caseId].name) || '';
+  const name = prompt('Rename case', current);
+  if(name===null) return;
+  const trimmed = name.trim();
+  if(!trimmed || trimmed===current) return;
+  try{
+    await apiPost(`/api/cases/${caseId}/rename`, {name: trimmed});
+    await loadSnapshot(true);
+    show('casedetail');
+  }catch(e){ alert(`Couldn't rename case: ${e.message}`); }
+}
+
+async function deleteCasePrompt(caseId){
+  if(!confirm('Delete this case and all of its documents? This cannot be undone.')) return;
+  try{
+    const res = await fetch(`/api/cases/${caseId}`, {method:'DELETE'});
+    const payload = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(payload.error || 'delete failed');
+    ACTIVE_CASE_ID = null;
     await loadSnapshot(true);
     show('cases');
-  }catch(e){ alert(`Comparison failed: ${e.message}`); }
+  }catch(e){ alert(`Couldn't delete case: ${e.message}`); }
+}
+
+async function removeCaseDocument(caseId, docId){
+  if(!confirm('Remove this document from the case? This cannot be undone.')) return;
+  try{
+    const res = await fetch(`/api/cases/${caseId}/documents/${docId}`, {method:'DELETE'});
+    const payload = await res.json().catch(()=>({}));
+    if(!res.ok) throw new Error(payload.error || 'remove failed');
+    await loadSnapshot(true);
+    show('casedetail');
+  }catch(e){ alert(`Couldn't remove document: ${e.message}`); }
 }
 
 /* ---- Review queue ---- */
@@ -1926,25 +2145,7 @@ document.addEventListener('click',(e)=>{
 });
 
 
-/* --------------------------------------------------------------------------
-   JARD demo/backend integration bridge
-   The UI never invents backend responses. If the repository backend is running,
-   set window.JARD_API_BASE before this file loads (or use same-origin /api).
-   Otherwise the existing demo data remains active.
-   -------------------------------------------------------------------------- */
-window.JARD_API_BASE = window.JARD_API_BASE || '';
-window.JARD_REPOSITORY = 'https://github.com/Gryezen/JARD-document-intelligence';
-async function jardApi(path, options={}){
-  const base = window.JARD_API_BASE;
-  if(!base) return {connected:false, demo:true};
-  const response = await fetch(base.replace(/\/$/,'') + path, {
-    ...options,
-    headers:{'Content-Type':'application/json',...(options.headers||{})}
-  });
-  if(!response.ok) throw new Error(`JARD API ${response.status}`);
-  const type = response.headers.get('content-type') || '';
-  return type.includes('application/json') ? response.json() : response.text();
-}
+
 
 /* Front-page reveal observer. */
 (function initLandingMotion(){
@@ -1967,6 +2168,7 @@ async function jardApi(path, options={}){
 })();
 
 refreshAccount();
+bootApp();
 </script>
 </body>
 </html>

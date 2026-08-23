@@ -9,7 +9,7 @@ from database.db import Database
 from orchestration.state import set_status
 
 GET_FIELDS_SQL = """
-    SELECT field_id, field_name, field_value AS value, confidence
+    SELECT field_id, field_name, field_value, confidence
     FROM EXTRACTED_FIELDS
     WHERE doc_id = {doc_id}
 """

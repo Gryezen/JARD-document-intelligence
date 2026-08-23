@@ -20,6 +20,7 @@ from agents import action as action_agent
 from config import load_settings
 from database.db import Database, ReadOnlyDatabase
 from database import queries
+from database import cases as case_queries
 from orchestration import workflow
 
 _FRONTEND_DIR = Path(__file__).resolve().parent.parent / "frontend"
@@ -61,7 +62,7 @@ def _row_to_dict(row: tuple, columns: list[str]) -> dict:
 @app.route("/api/documents", methods=["GET"])
 def list_documents():
     rows = queries.list_documents(db)
-    cols = ["doc_id", "filename", "document_type", "vendor", "status", "uploaded_at"]
+    cols = ["doc_id", "filename", "document_type", "vendor", "status", "uploaded_at", "case_id"]
     return jsonify([_row_to_dict(r, cols) for r in rows])
 
 
@@ -70,7 +71,7 @@ def get_document(doc_id: str):
     row = queries.get_document(db, doc_id)
     if row is None:
         return jsonify({"error": "not found"}), 404
-    cols = ["doc_id", "filename", "document_type", "vendor", "status", "page_count", "uploaded_at"]
+    cols = ["doc_id", "filename", "document_type", "vendor", "status", "page_count", "uploaded_at", "case_id"]
     return jsonify(_row_to_dict(row, cols))
 
 
@@ -114,6 +115,114 @@ def get_related_documents(doc_id: str):
     return jsonify([_row_to_dict(r, cols) for r in rows])
 
 
+def _case_summary_status(doc_statuses: list[str]) -> str:
+    """Roll a case's documents' individual statuses up into one label the
+    Cases list page can badge without the client re-deriving it per case.
+    """
+    if not doc_statuses:
+        return "empty"
+    if any(s == "review" for s in doc_statuses):
+        return "needs_review"
+    if any(s == "failed" for s in doc_statuses):
+        return "failed"
+    if any(s in ("uploaded", "extracting", "reasoning") for s in doc_statuses):
+        return "processing"
+    return "complete"
+
+
+@app.route("/api/cases", methods=["GET"])
+def list_cases():
+    case_rows = case_queries.list_cases(db)
+    doc_summary = case_queries.list_case_doc_summary(db)
+    statuses_by_case: dict[str, list[str]] = {}
+    for case_id, _doc_id, status in doc_summary:
+        statuses_by_case.setdefault(case_id, []).append(status)
+
+    cols = ["case_id", "name", "created_by", "created_at", "updated_at"]
+    result = []
+    for row in case_rows:
+        case = _row_to_dict(row, cols)
+        doc_statuses = statuses_by_case.get(case["case_id"], [])
+        case["document_count"] = len(doc_statuses)
+        case["status"] = _case_summary_status(doc_statuses)
+        result.append(case)
+    return jsonify(result)
+
+
+@app.route("/api/cases", methods=["POST"])
+def create_case():
+    body = request.get_json(silent=True) or {}
+    name = (body.get("name") or "").strip() or "Untitled case"
+    created_by = body.get("created_by")
+    case_id = case_queries.create_case(db, name=name, created_by=created_by)
+    return jsonify({"case_id": case_id, "name": name}), 201
+
+
+@app.route("/api/cases/<case_id>", methods=["GET"])
+def get_case(case_id: str):
+    case_row = case_queries.get_case(db, case_id)
+    if case_row is None:
+        return jsonify({"error": "not found"}), 404
+    cols = ["case_id", "name", "created_by", "created_at", "updated_at"]
+    case = _row_to_dict(case_row, cols)
+    doc_cols = ["doc_id", "filename", "document_type", "vendor", "status", "uploaded_at"]
+    documents = [_row_to_dict(r, doc_cols) for r in case_queries.list_case_documents(db, case_id)]
+    case["documents"] = documents
+    return jsonify(case)
+
+
+@app.route("/api/cases/<case_id>/rename", methods=["POST"])
+def rename_case(case_id: str):
+    body = request.get_json(force=True)
+    name = (body.get("name") or "").strip()
+    if not name:
+        return jsonify({"error": "missing 'name'"}), 400
+    if case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": "not found"}), 404
+    try:
+        case_queries.rename_case(db, case_id, name)
+    except Exception as e:
+        return jsonify({"error": f"rename failed: {e}"}), 500
+    return jsonify({"case_id": case_id, "name": name})
+
+
+@app.route("/api/cases/<case_id>", methods=["DELETE"])
+def delete_case(case_id: str):
+    if case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": "not found"}), 404
+    try:
+        case_queries.delete_case(db, case_id)
+    except Exception as e:
+        return jsonify({"error": f"delete failed: {e}"}), 500
+    return jsonify({"case_id": case_id, "deleted": True})
+
+
+@app.route("/api/cases/<case_id>/documents/<doc_id>", methods=["DELETE"])
+def remove_case_document(case_id: str, doc_id: str):
+    try:
+        removed = case_queries.remove_document(db, case_id, doc_id)
+    except Exception as e:
+        return jsonify({"error": f"remove failed: {e}"}), 500
+    if not removed:
+        return jsonify({"error": "not found"}), 404
+    return jsonify({"doc_id": doc_id, "removed": True})
+
+
+@app.route("/api/cases/<case_id>/process", methods=["POST"])
+def process_case(case_id: str):
+    """Run cross-document reasoning across every linked, not-yet-compared
+    pair of documents in this case. Safe to call again after a document is
+    added to an already-processed case — already-compared pairs are skipped.
+    """
+    if case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": "not found"}), 404
+    try:
+        result = workflow.compare_case(db, settings, case_id)
+    except Exception as e:
+        return jsonify({"error": f"comparison failed: {e}"}), 500
+    return jsonify(result)
+
+
 @app.route("/api/discrepancies/open", methods=["GET"])
 def get_open_discrepancies():
     rows = queries.get_open_discrepancies(db)
@@ -125,6 +234,13 @@ def get_open_discrepancies():
 def upload_document():
     """Accept a file, run ingestion -> extraction -> relationship linking ->
     confidence gate synchronously, and return the result.
+
+    Every document belongs to a case (see database/cases.py): pass an
+    existing `case_id` form field to add this file to that case, or omit
+    it to have a new case created automatically (named after the file) —
+    that's what happens the first time a batch of files is dropped on the
+    Documents page. Cross-document reasoning only ever compares documents
+    that share a case.
 
     Synchronous on purpose for the hackathon MVP: judges watching the demo
     should see the pipeline actually run, not poll a job queue. If document
@@ -149,15 +265,47 @@ def upload_document():
     file.save(stored_path)
 
     uploaded_by = request.form.get("uploaded_by")
+    case_id = request.form.get("case_id") or None
+
+    if case_id and case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": f"no such case: {case_id}"}), 404
+
+    created_new_case = False
+    if not case_id:
+        case_id = case_queries.create_case(db, name=filename, created_by=uploaded_by)
+        created_new_case = True
 
     try:
         result = workflow.process_new_document(
-            db, settings, file_path=stored_path, filename=filename, uploaded_by=uploaded_by
+            db, settings, file_path=stored_path, filename=filename, uploaded_by=uploaded_by, case_id=case_id
         )
+        case_queries.touch_case(db, case_id)
     except Exception as e:
         return jsonify({"error": f"processing failed: {e}"}), 500
 
+    result["case_id"] = case_id
+    result["case_created"] = created_new_case
     return jsonify(result), 201
+
+
+@app.route("/api/documents/<doc_id>", methods=["DELETE"])
+def delete_document(doc_id: str):
+    """Remove a single document (and every row that references it) from
+    whatever case it belongs to. A no-op-safe 404 if the document doesn't
+    have a case (shouldn't happen for anything uploaded through this API,
+    but guards against stale/partial data).
+    """
+    row = queries.get_document(db, doc_id)
+    if row is None:
+        return jsonify({"error": "not found"}), 404
+    case_id = row[-1]  # case_id is the last column per queries.GET_DOCUMENT_SQL
+    if not case_id:
+        return jsonify({"error": "document has no case"}), 400
+    try:
+        case_queries.remove_document(db, case_id, doc_id)
+    except Exception as e:
+        return jsonify({"error": f"delete failed: {e}"}), 500
+    return jsonify({"doc_id": doc_id, "deleted": True})
 
 
 @app.route("/api/documents/<doc_id>/process", methods=["POST"])
