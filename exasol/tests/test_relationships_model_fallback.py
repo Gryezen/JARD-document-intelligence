@@ -41,7 +41,9 @@ class FakeDatabase:
 
 class FakeSettings:
     llm_api_key = "fake-key"
+    reasoning_provider = "gemini"
     reasoning_model = "gemini-3.6-flash"
+    ollama_host = "http://localhost:11434"
 
 
 @patch("agents.relationships.call_tool")

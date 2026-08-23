@@ -28,7 +28,9 @@ class FakeDatabase:
 
 class FakeSettings:
     llm_api_key = "fake-key"
+    extraction_provider = "gemini"
     extraction_model = "gemini-3.6-flash"
+    ollama_host = "http://localhost:11434"
 
 
 @patch("agents.extraction.call_tool")

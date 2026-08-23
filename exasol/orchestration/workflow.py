@@ -62,6 +62,14 @@ MARK_PAIR_COMPARED_SQL = """
 
 GET_CASE_DOCS_SQL = "SELECT doc_id, status FROM DOCUMENTS WHERE case_id = {case_id}"
 
+GET_DOCUMENT_FOR_RETRY_SQL = """
+    SELECT case_id, source_path, status FROM DOCUMENTS WHERE doc_id = {doc_id}
+"""
+
+GET_FAILED_CASE_DOCS_SQL = """
+    SELECT doc_id FROM DOCUMENTS WHERE case_id = {case_id} AND status = 'failed'
+"""
+
 
 def process_new_document(
     db: Database,
@@ -125,6 +133,107 @@ def process_new_document(
         ],
         "gate_decision": gate_result.decision,
         "low_confidence_fields": gate_result.low_confidence_fields,
+    }
+
+
+def retry_document(db: Database, settings: Settings, doc_id: str) -> dict:
+    """Re-run extraction -> relationship linking -> confidence gate for one
+    document that's currently in 'failed' status, reusing the file already
+    saved at DOCUMENTS.source_path — no re-upload needed. This is the
+    "Retry" button's backend: most failures are a transient LLM-provider
+    issue (Gemini quota, Ollama momentarily unreachable), not a problem
+    with the file itself, so simply running the same steps again is
+    usually enough.
+
+    Any partial state left over from the failed attempt is cleared first —
+    extraction may have inserted EXTRACTED_FIELDS rows before a later step
+    (relationship linking or the confidence gate) is what actually threw,
+    and re-running extract_fields() on top of that would duplicate them
+    rather than replace them. DOCUMENT_RELATIONSHIPS rows created before a
+    later failure are cleared the same way, since link_document() would
+    otherwise create a second link to the same document.
+
+    Raises ValueError if the document doesn't exist or isn't currently
+    'failed' (retrying a document that's still processing or already
+    complete isn't a meaningful operation, so this is treated as a caller
+    error rather than silently no-op'ing).
+    """
+    rows = db.fetchall(GET_DOCUMENT_FOR_RETRY_SQL, {"doc_id": doc_id})
+    if not rows:
+        raise ValueError(f"no such document: {doc_id}")
+    case_id, source_path, status = rows[0]
+    if status != "failed":
+        raise ValueError(f"document {doc_id} is not in 'failed' status (currently '{status}')")
+
+    db.execute("DELETE FROM EXTRACTED_FIELDS WHERE doc_id = {doc_id}", {"doc_id": doc_id})
+    db.execute(
+        "DELETE FROM DOCUMENT_RELATIONSHIPS WHERE doc_id_1 = {doc_id} OR doc_id_2 = {doc_id}",
+        {"doc_id": doc_id},
+    )
+
+    set_status(db, doc_id, "extracting", current_status="failed")
+
+    try:
+        text, _page_count, _ocr_confidence = ingestion_agent.extract_text_from_file(source_path)
+
+        fields = extraction_agent.extract_fields(db, settings, doc_id=doc_id, document_text=text)
+
+        relationships = relationships_agent.link_document(
+            db, settings, doc_id=doc_id, case_id=case_id
+        )
+
+        gate_result = confidence_agent.run_confidence_gate(
+            db, doc_id=doc_id, threshold=settings.confidence_threshold
+        )
+    except Exception:
+        set_status(db, doc_id, "failed", current_status="extracting")
+        raise
+
+    log_event(
+        db,
+        agent_name="ingestion",
+        action="retried_document",
+        doc_id=doc_id,
+        output_summary=f"retry succeeded, gate_decision={gate_result.decision}, field_count={len(fields)}",
+    )
+
+    return {
+        "doc_id": doc_id,
+        "case_id": case_id,
+        "field_count": len(fields),
+        "linked_documents": [
+            {"other_doc_id": r.other_doc_id, "relationship_type": r.relationship_type, "confidence": r.confidence}
+            for r in relationships
+        ],
+        "gate_decision": gate_result.decision,
+        "low_confidence_fields": gate_result.low_confidence_fields,
+    }
+
+
+def retry_failed_documents_for_case(db: Database, settings: Settings, case_id: str) -> dict:
+    """Retry every document currently in 'failed' status within one case.
+
+    Each document is retried independently — one still failing (e.g. its
+    file is genuinely corrupt, vs. another that just hit a transient
+    rate-limit) doesn't stop the rest from being attempted. This is the
+    "Retry all failed" button's backend.
+    """
+    failed_doc_ids = [r[0] for r in db.fetchall(GET_FAILED_CASE_DOCS_SQL, {"case_id": case_id})]
+
+    succeeded = []
+    still_failed = []
+    for doc_id in failed_doc_ids:
+        try:
+            retry_document(db, settings, doc_id)
+            succeeded.append(doc_id)
+        except Exception as e:
+            still_failed.append({"doc_id": doc_id, "error": str(e)})
+
+    return {
+        "case_id": case_id,
+        "attempted": len(failed_doc_ids),
+        "succeeded": succeeded,
+        "still_failed": still_failed,
     }
 
 

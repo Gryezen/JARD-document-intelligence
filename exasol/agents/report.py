@@ -86,7 +86,9 @@ def generate_case_report(db: Database, settings: Settings, case_id: str) -> str:
     context = _build_case_context(db, case_id)
 
     payload = call_tool(
+        provider=settings.reasoning_provider,
         api_key=settings.llm_api_key,
+        ollama_host=settings.ollama_host,
         model=settings.reasoning_model,
         system_prompt=_SYSTEM_PROMPT,
         tool_name="record_case_report",

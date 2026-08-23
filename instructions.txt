@@ -1,0 +1,33 @@
+to start ollama:
+
+ollama start
+
+
+
+
+
+to clear failed data from previous version (reset sqls):
+
+python scripts/apply_schema.py schema.sql                                                                                                                     
+
+python scripts/apply_schema.py docs/mcp-grants.sql                                                                                                                                          
+
+to start: 
+
+ C:\Users\abhin\AppData\Local\Microsoft\WindowsApps\python3.13.exe c:/Users/abhin/Documents/Code/Hackathons/ExasolProject/exasol/main.py    
+
+
+
+to start the server:
+
+ python -m api.routes 
+
+
+
+
+
+
+
+to stop ollama:
+
+ollama stop qwen3:8b

@@ -369,6 +369,38 @@ def process_document(doc_id: str):
     return jsonify(result)
 
 
+@app.route("/api/documents/<doc_id>/retry", methods=["POST"])
+def retry_document(doc_id: str):
+    """Retry a document stuck in 'failed' status — re-runs extraction
+    through the confidence gate against the file already on disk, no
+    re-upload needed. Most failures are a transient LLM-provider issue
+    (rate limit, Ollama momentarily unreachable), so this is usually
+    enough on its own.
+    """
+    try:
+        result = workflow.retry_document(db, settings, doc_id)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return _llm_error_response(e, "retry")
+    return jsonify(result)
+
+
+@app.route("/api/cases/<case_id>/retry-failed", methods=["POST"])
+def retry_failed_documents_for_case(case_id: str):
+    """Retry every document in 'failed' status within one case in a single
+    call — the "Retry all failed" button. Each document is attempted
+    independently; one still failing doesn't stop the rest.
+    """
+    if case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": f"no such case: {case_id}"}), 404
+    try:
+        result = workflow.retry_failed_documents_for_case(db, settings, case_id)
+    except Exception as e:
+        return jsonify({"error": f"retry-all failed: {e}"}), 500
+    return jsonify(result)
+
+
 @app.route("/api/reviews", methods=["POST"])
 def submit_review():
     body = request.get_json(force=True)

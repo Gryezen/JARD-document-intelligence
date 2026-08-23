@@ -91,6 +91,33 @@ def _extract_image_text(path: Path) -> tuple[str, float | None]:
     return _ocr_image(image)
 
 
+def extract_text_from_file(file_path: str) -> tuple[str, int, float | None]:
+    """Turn a file already on disk into (text, page_count, ocr_confidence)
+    without touching the database or creating a DOCUMENTS row.
+
+    Split out of ingest_document() so orchestration.workflow.retry_document()
+    can re-run just the text-extraction step against the same stored file
+    after a failure (source_path is kept permanently — see
+    api/routes.py's upload handler) without re-ingesting the file as a
+    brand-new document.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        raise FileNotFoundError(file_path)
+
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _extract_pdf_text(path)
+    elif suffix in (".png", ".jpg", ".jpeg", ".tiff", ".bmp"):
+        text, ocr_confidence = _extract_image_text(path)
+        return text, 1, ocr_confidence
+    elif suffix == ".txt":
+        text = path.read_text(encoding="utf-8", errors="replace")
+        return text, 1, None
+    else:
+        raise ValueError(f"Unsupported file type: {suffix}")
+
+
 def ingest_document(
     db: Database,
     file_path: str,
@@ -109,25 +136,8 @@ def ingest_document(
     scoped to documents sharing a case, so this is what makes that scoping
     possible downstream in agents/relationships.py.
     """
+    text, page_count, ocr_confidence = extract_text_from_file(file_path)
     path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(file_path)
-
-    suffix = path.suffix.lower()
-    if suffix == ".pdf":
-        text, page_count, ocr_confidence = _extract_pdf_text(path)
-    elif suffix in (".png", ".jpg", ".jpeg", ".tiff", ".bmp"):
-        text, ocr_confidence = _extract_image_text(path)
-        page_count = 1
-    elif suffix == ".txt":
-        # Plain-text uploads (e.g. an emailed form, or an already-OCR'd
-        # document handed off from another system) — no OCR needed, same
-        # as a native PDF text layer.
-        text = path.read_text(encoding="utf-8", errors="replace")
-        page_count = 1
-        ocr_confidence = None
-    else:
-        raise ValueError(f"Unsupported file type: {suffix}")
 
     doc_id = str(uuid.uuid4())
     db.execute(
@@ -151,7 +161,7 @@ def ingest_document(
         agent_name="ingestion",
         action="ingested_document",
         doc_id=doc_id,
-        input_summary=f"file={filename}, type={suffix}",
+        input_summary=f"file={filename}, type={path.suffix}",
         output_summary=f"page_count={page_count}, text_chars={len(text)}{ocr_note}",
         confidence=(ocr_confidence / 100.0) if ocr_confidence is not None else None,
     )

@@ -1,0 +1,33 @@
+# docker-compose.yml — packages ONLY the app (this project's own code +
+# its Python/OCR dependencies). Exasol and Ollama are deliberately NOT
+# services here — see docs/TEAM-SETUP.md for why, and for how to install
+# them (each is a separate one-command local install, not something this
+# compose file can responsibly bundle: Exasol's local install needs
+# privileged Docker/Podman access and its own lifecycle, and Ollama wants
+# direct access to your GPU).
+#
+# Usage: cp .env.example .env, fill it in (see docs/TEAM-SETUP.md), then:
+#   docker compose up --build
+
+services:
+  app:
+    build: .
+    ports:
+      - "10000:10000"
+    env_file:
+      - .env
+    volumes:
+      # Uploaded files survive `docker compose down`/`up` instead of
+      # vanishing with the container filesystem.
+      - uploads:/app/data/uploads
+    extra_hosts:
+      # Lets the container reach services running on your host machine
+      # (your local Exasol instance, your local Ollama server) via
+      # "host.docker.internal" regardless of OS. Docker Desktop (Mac/
+      # Windows) provides this automatically; "host-gateway" is what
+      # makes the equivalent work on native Linux Docker too (needs
+      # Docker Engine 20.10+).
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  uploads:

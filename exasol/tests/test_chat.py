@@ -32,7 +32,9 @@ class FakeReadOnlyDB:
 
 class FakeSettings:
     llm_api_key = "fake-key"
+    chat_provider = "gemini"
     chat_model = "gemini-3.6-flash"
+    ollama_host = "http://localhost:11434"
 
 
 @patch("agents.chat.call_tool")
