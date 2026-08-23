@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>JARD — Document Intelligence Platform</title>
+<link rel="icon" type="image/x-icon" href="/img/favicon.ico">
+<link rel="icon" type="image/png" sizes="16x16" href="/img/favicon-16x16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/img/favicon-32x32.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/img/favicon-192x192.png">
+<link rel="apple-touch-icon" href="/img/favicon-192x192.png">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:opsz,wght@6..96,400;6..96,500;6..96,600&family=Inter:wght@400;500;600;700&display=swap');
 :root{--bg:#f6f8fa;--surface:#fff;--ink:#17212b;--muted:#66717d;--line:#d9dee5;--blue:#164b78;--blue2:#eaf2f8;--green:#18794e;--greenbg:#eaf6ef;--amber:#a15c00;--amberbg:#fff4e5;--red:#b42318;--redbg:#fdecec;--info:#175cd3;--shadow:0 2px 8px rgba(23,33,43,.05);--r:7px}
@@ -1127,12 +1132,24 @@ body{font-family:"Inter","Avenir Next","Segoe UI",system-ui,sans-serif}
   #landing .reveal-on-scroll,#landing .reveal-stagger > *{opacity:1!important;transform:none!important;transition:none!important}
 }
 
+/* Logo image now fills the brandmark slot instead of a "J" letter — the
+   artwork already has its own dark background/rounded-corner/fold, so
+   every earlier .brandmark background/color rule (including the
+   !important ones above) is neutralized here, last in the cascade. */
+.brandmark,#landing .brandmark,html[data-theme="dark"] #landing .brandmark{
+  background:transparent!important;
+  border-radius:6px!important;
+  box-shadow:none!important;
+  object-fit:contain;
+  padding:0;
+}
+
 </style>
 </head>
 <body>
 <div id="landing" class="landing">
 <header class="site-header">
-<a class="brand" href="#"><span class="brandmark">J</span><span class="brand-word">JARD</span></a>
+<a class="brand" href="#"><img class="brandmark" src="/img/logo.png" alt="JARD logo"><span class="brand-word">JARD</span></a>
 <nav class="nav"><a href="#about">About Us</a><a href="#workflow">How It Works</a></nav>
 <div class="header-actions">
 <button class="btn primary" onclick="openAuth('signin')">Sign In</button>
@@ -1249,7 +1266,7 @@ Chat identity   → read-only access → SELECT-only queries</div></div></div></
 
 <div id="app" class="app">
 <aside class="sidebar">
-  <div class="sidebrand"><span class="brandmark">J</span><span class="brandtext" style="margin-left:10px;font-weight:750">JARD</span></div>
+  <div class="sidebrand"><img class="brandmark" src="/img/logo.png" alt="JARD logo"><span class="brandtext" style="margin-left:10px;font-weight:750">JARD</span></div>
   <nav class="side-nav">
     <div class="sidegroup">Pipeline</div>
     <button class="sidebtn active" data-page="dashboard" onclick="show('dashboard')"><span class="si">◆</span><span class="label">Dashboard</span></button>

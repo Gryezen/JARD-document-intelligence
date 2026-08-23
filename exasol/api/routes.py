@@ -17,6 +17,8 @@ from werkzeug.utils import secure_filename
 from agents import chat as chat_agent
 from agents import human_review as human_review_agent
 from agents import action as action_agent
+from agents import report as report_agent
+from agents.llm_client import LLMRateLimitError, LLMConnectionError
 from config import load_settings
 from database.db import Database, ReadOnlyDatabase
 from database import queries
@@ -53,6 +55,35 @@ def get_config():
             "allowed_extensions": sorted(_ALLOWED_EXTENSIONS),
         }
     )
+
+
+def _llm_error_response(e: Exception, action_desc: str):
+    """Shared handling for the three routes that can hit an LLM-provider
+    failure: upload (extraction), and the two cross-document comparison
+    endpoints (reasoning/action).
+
+    Two distinct situations get their own response instead of falling into
+    the generic 500 path, because both tell the caller something actionable
+    that a flat 500 wouldn't:
+      - LLMRateLimitError: transient, hosted-provider quota exhaustion
+        (Gemini). Frontend gets a 429 + Retry-After so it knows to retry
+        later rather than treating it as a hard failure.
+      - LLMConnectionError: local Ollama isn't reachable, or the configured
+        model hasn't been pulled yet. Not transient in the same sense —
+        retrying won't help until the user starts Ollama / pulls the
+        model — so it gets a 503 with the actionable message intact
+        rather than being buried in a generic "failed: ..." string.
+    """
+    if isinstance(e, LLMRateLimitError):
+        body = {"error": f"{action_desc} rate-limited by the LLM provider: {e}", "rate_limited": True}
+        headers = {}
+        if e.retry_after_seconds is not None:
+            body["retry_after_seconds"] = e.retry_after_seconds
+            headers["Retry-After"] = str(int(e.retry_after_seconds))
+        return jsonify(body), 429, headers
+    if isinstance(e, LLMConnectionError):
+        return jsonify({"error": f"{action_desc} failed: {e}", "llm_unreachable": True}), 503
+    return jsonify({"error": f"{action_desc} failed: {e}"}), 500
 
 
 def _row_to_dict(row: tuple, columns: list[str]) -> dict:
@@ -138,7 +169,7 @@ def list_cases():
     for case_id, _doc_id, status in doc_summary:
         statuses_by_case.setdefault(case_id, []).append(status)
 
-    cols = ["case_id", "name", "created_by", "created_at", "updated_at"]
+    cols = ["case_id", "name", "created_by", "created_at", "updated_at", "report_summary", "report_generated_at"]
     result = []
     for row in case_rows:
         case = _row_to_dict(row, cols)
@@ -163,12 +194,28 @@ def get_case(case_id: str):
     case_row = case_queries.get_case(db, case_id)
     if case_row is None:
         return jsonify({"error": "not found"}), 404
-    cols = ["case_id", "name", "created_by", "created_at", "updated_at"]
+    cols = ["case_id", "name", "created_by", "created_at", "updated_at", "report_summary", "report_generated_at"]
     case = _row_to_dict(case_row, cols)
     doc_cols = ["doc_id", "filename", "document_type", "vendor", "status", "uploaded_at"]
     documents = [_row_to_dict(r, doc_cols) for r in case_queries.list_case_documents(db, case_id)]
     case["documents"] = documents
     return jsonify(case)
+
+
+@app.route("/api/cases/<case_id>/report", methods=["POST"])
+def generate_case_report(case_id: str):
+    """(Re)generate the case's LLM report on demand — e.g. a "Refresh
+    report" button, or to retry after the automatic generation at the end
+    of /api/cases/<id>/process got rate-limited. One model call regardless
+    of case size (see agents/report.py).
+    """
+    if case_queries.get_case(db, case_id) is None:
+        return jsonify({"error": "not found"}), 404
+    try:
+        summary = report_agent.generate_case_report(db, settings, case_id)
+    except Exception as e:
+        return _llm_error_response(e, "report generation")
+    return jsonify({"case_id": case_id, "report_summary": summary})
 
 
 @app.route("/api/cases/<case_id>/rename", methods=["POST"])
@@ -219,7 +266,7 @@ def process_case(case_id: str):
     try:
         result = workflow.compare_case(db, settings, case_id)
     except Exception as e:
-        return jsonify({"error": f"comparison failed: {e}"}), 500
+        return _llm_error_response(e, "comparison")
     return jsonify(result)
 
 
@@ -281,7 +328,7 @@ def upload_document():
         )
         case_queries.touch_case(db, case_id)
     except Exception as e:
-        return jsonify({"error": f"processing failed: {e}"}), 500
+        return _llm_error_response(e, "processing")
 
     result["case_id"] = case_id
     result["case_created"] = created_new_case
@@ -318,7 +365,7 @@ def process_document(doc_id: str):
     try:
         result = workflow.compare_related_documents(db, settings, doc_id)
     except Exception as e:
-        return jsonify({"error": f"comparison failed: {e}"}), 500
+        return _llm_error_response(e, "comparison")
     return jsonify(result)
 
 

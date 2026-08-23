@@ -230,7 +230,9 @@ def link_document(
 
         try:
             result = call_tool(
+                provider=settings.reasoning_provider,
                 api_key=settings.llm_api_key,
+                ollama_host=settings.ollama_host,
                 model=settings.reasoning_model,
                 system_prompt=_SYSTEM_PROMPT,
                 tool_name="assess_relationship",

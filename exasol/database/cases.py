@@ -22,13 +22,18 @@ CREATE_CASE_SQL = """
 """
 
 GET_CASE_SQL = """
-    SELECT case_id, name, created_by, created_at, updated_at
+    SELECT case_id, name, created_by, created_at, updated_at, report_summary, report_generated_at
     FROM CASES WHERE case_id = {case_id}
 """
 
 LIST_CASES_SQL = """
-    SELECT case_id, name, created_by, created_at, updated_at
+    SELECT case_id, name, created_by, created_at, updated_at, report_summary, report_generated_at
     FROM CASES ORDER BY updated_at DESC
+"""
+
+SAVE_REPORT_SQL = """
+    UPDATE CASES SET report_summary = {report_summary}, report_generated_at = {timestamp}
+    WHERE case_id = {case_id}
 """
 
 LIST_CASE_DOC_SUMMARY_SQL = """
@@ -108,6 +113,13 @@ def rename_case(db: Database, case_id: str, name: str) -> None:
 
 def touch_case(db: Database, case_id: str) -> None:
     db.execute(TOUCH_CASE_SQL, {"case_id": case_id, "timestamp": _now()})
+
+
+def save_report(db: Database, case_id: str, report_summary: str) -> None:
+    db.execute(
+        SAVE_REPORT_SQL,
+        {"case_id": case_id, "report_summary": report_summary, "timestamp": _now()},
+    )
 
 
 def _delete_document_rows(db: Database, doc_id: str, source_path: str | None) -> None:

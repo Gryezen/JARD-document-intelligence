@@ -12,9 +12,9 @@ error here rather than silently passing against a fake shape.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from google.genai import types
+from google.genai import errors, types
 
-from agents.llm_client import call_tool, LLMCallError
+from agents.llm_client import call_tool, LLMCallError, LLMRateLimitError
 
 
 def _response_with_function_call(name: str, args: dict):
@@ -114,3 +114,96 @@ def test_call_tool_raises_on_empty_candidates(mock_client_cls):
             tool_schema={"type": "object", "properties": {}},
             user_content="anything",
         )
+
+
+def _quota_exceeded_error(retry_delay_seconds: str = "30s") -> errors.ClientError:
+    """Build a ClientError shaped like Gemini's real 429 quota response
+    (RESOURCE_EXHAUSTED with a RetryInfo.retryDelay), so retry tests exercise
+    the same parsing path production traffic hits.
+    """
+    body = {
+        "error": {
+            "code": 429,
+            "message": "You exceeded your current quota.",
+            "status": "RESOURCE_EXHAUSTED",
+            "details": [
+                {
+                    "@type": "type.googleapis.com/google.rpc.RetryInfo",
+                    "retryDelay": retry_delay_seconds,
+                }
+            ],
+        }
+    }
+    return errors.ClientError(code=429, response_json=body)
+
+
+@patch("agents.llm_client.time.sleep")
+@patch("agents.llm_client.genai.Client")
+def test_call_tool_retries_on_429_then_succeeds(mock_client_cls, mock_sleep):
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = [
+        _quota_exceeded_error(),
+        _response_with_function_call("run_query", {"sql": "SELECT 1", "explanation": "ok"}),
+    ]
+    mock_client_cls.return_value = mock_client
+
+    result = call_tool(
+        api_key="fake-key",
+        model="gemini-3.6-flash",
+        system_prompt="system",
+        tool_name="run_query",
+        tool_description="desc",
+        tool_schema={"type": "object", "properties": {}},
+        user_content="how many documents are there?",
+        max_retries=3,
+    )
+
+    assert result == {"sql": "SELECT 1", "explanation": "ok"}
+    assert mock_client.models.generate_content.call_count == 2
+    mock_sleep.assert_called_once()  # slept once, honoring the 30s retryDelay (+ jitter)
+    assert mock_sleep.call_args[0][0] >= 30
+
+
+@patch("agents.llm_client.time.sleep")
+@patch("agents.llm_client.genai.Client")
+def test_call_tool_raises_rate_limit_error_after_exhausting_retries(mock_client_cls, mock_sleep):
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = _quota_exceeded_error("5s")
+    mock_client_cls.return_value = mock_client
+
+    with pytest.raises(LLMRateLimitError) as exc_info:
+        call_tool(
+            api_key="fake-key",
+            model="gemini-3.6-flash",
+            system_prompt="system",
+            tool_name="run_query",
+            tool_description="desc",
+            tool_schema={"type": "object", "properties": {}},
+            user_content="anything",
+            max_retries=2,
+        )
+
+    assert mock_client.models.generate_content.call_count == 3  # initial + 2 retries
+    assert exc_info.value.retry_after_seconds == 5.0
+
+
+@patch("agents.llm_client.genai.Client")
+def test_call_tool_does_not_retry_non_429_client_errors(mock_client_cls):
+    mock_client = MagicMock()
+    mock_client.models.generate_content.side_effect = errors.ClientError(
+        code=400, response_json={"error": {"code": 400, "message": "bad request"}}
+    )
+    mock_client_cls.return_value = mock_client
+
+    with pytest.raises(errors.ClientError):
+        call_tool(
+            api_key="fake-key",
+            model="gemini-3.6-flash",
+            system_prompt="system",
+            tool_name="run_query",
+            tool_description="desc",
+            tool_schema={"type": "object", "properties": {}},
+            user_content="anything",
+        )
+
+    assert mock_client.models.generate_content.call_count == 1

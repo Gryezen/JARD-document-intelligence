@@ -71,6 +71,20 @@ INSERT_DISCREPANCY_SQL = """
         ({discrepancy_id}, {doc_id_1}, {doc_id_2}, {field_name}, {value_1}, {value_2}, {severity}, 'open', {explanation}, CURRENT_TIMESTAMP)
 """
 
+# Order-independent (doc_id_1/doc_id_2 can be swapped between calls) —
+# guards against inserting the same (pair, field) discrepancy twice even
+# if compare_documents somehow gets invoked more than once for the same
+# pair. The real fix for *why* that could happen is the compared_at check
+# in orchestration/workflow.py; this is the defensive backstop so a race
+# or a future call site that forgets that check doesn't silently duplicate
+# rows again.
+CHECK_EXISTING_DISCREPANCY_SQL = """
+    SELECT discrepancy_id FROM DISCREPANCIES
+    WHERE ((doc_id_1 = {doc_id_1} AND doc_id_2 = {doc_id_2}) OR (doc_id_1 = {doc_id_2} AND doc_id_2 = {doc_id_1}))
+      AND field_name = {field_name}
+      AND status = 'open'
+"""
+
 GET_FIELDS_SQL = """
     SELECT field_name, field_value, confidence
     FROM EXTRACTED_FIELDS
@@ -107,7 +121,9 @@ def compare_documents(
     fields_2 = db.fetchall(GET_FIELDS_SQL, {"doc_id": doc_id_2})
 
     payload = call_tool(
+        provider=settings.reasoning_provider,
         api_key=settings.llm_api_key,
+        ollama_host=settings.ollama_host,
         model=settings.reasoning_model,
         system_prompt=_SYSTEM_PROMPT,
         tool_name="record_discrepancies",
@@ -124,6 +140,13 @@ def compare_documents(
     discrepancies_raw = payload.get("discrepancies", [])
     results: list[Discrepancy] = []
     for d in discrepancies_raw:
+        existing = db.fetchall(
+            CHECK_EXISTING_DISCREPANCY_SQL,
+            {"doc_id_1": doc_id_1, "doc_id_2": doc_id_2, "field_name": d["field_name"]},
+        )
+        if existing:
+            continue  # already recorded for this pair — skip the duplicate insert
+
         discrepancy_id = str(uuid.uuid4())
         db.execute(
             INSERT_DISCREPANCY_SQL,

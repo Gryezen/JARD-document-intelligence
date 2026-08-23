@@ -50,13 +50,20 @@ class Settings:
     # Read-only connection, used ONLY by the chat agent's SQL execution path.
     exasol_ro: ExasolConnection
 
-    # LLM (Gemini). One key covers all three model slots below — Gemini's
-    # free tier makes "flash" a reasonable default for a hackathon budget;
-    # override any slot independently via env vars if a task needs more
-    # headroom (e.g. a "pro" model for reasoning).
-    llm_api_key: str
+    # LLM — three independent slots (extraction, reasoning [also used by
+    # action drafting + relationship inference], chat). Each slot picks its
+    # own provider: "ollama" (local, free, runs on your GPU) or "gemini"
+    # (hosted, needs GEMINI_API_KEY, subject to Gemini's quota). Default is
+    # Ollama for everything; flip a single slot to "gemini" via env var if
+    # you want that one path on a hosted model without touching the others.
+    llm_api_key: str | None       # only required if any slot uses "gemini"
+    ollama_host: str
+
+    extraction_provider: str
     extraction_model: str
+    reasoning_provider: str
     reasoning_model: str
+    chat_provider: str
     chat_model: str
 
     # Confidence gate threshold (0-1). Below this, a field pauses for human review.
@@ -66,7 +73,30 @@ class Settings:
     upload_dir: str
 
 
+_DEFAULT_OLLAMA_MODEL = "qwen2.5:7b-instruct"
+
+
+def _provider(name: str) -> str:
+    value = os.getenv(name, "ollama").strip().lower()
+    if value not in ("ollama", "gemini"):
+        raise RuntimeError(f"{name} must be 'ollama' or 'gemini', got {value!r}")
+    return value
+
+
+def _model_default(provider: str) -> str:
+    return _DEFAULT_OLLAMA_MODEL if provider == "ollama" else "gemini-3.6-flash"
+
+
 def load_settings() -> Settings:
+    extraction_provider = _provider("EXTRACTION_PROVIDER")
+    reasoning_provider = _provider("REASONING_PROVIDER")
+    chat_provider = _provider("CHAT_PROVIDER")
+
+    # Gemini key is only mandatory if something actually uses Gemini —
+    # a pure-Ollama setup shouldn't be blocked on an unrelated API key.
+    needs_gemini = "gemini" in (extraction_provider, reasoning_provider, chat_provider)
+    llm_api_key = _require("GEMINI_API_KEY") if needs_gemini else os.getenv("GEMINI_API_KEY")
+
     return Settings(
         exasol_rw=ExasolConnection(
             dsn=_require("EXASOL_DSN", "localhost:8563"),
@@ -80,10 +110,14 @@ def load_settings() -> Settings:
             password=_require("EXASOL_RO_PASSWORD"),
             schema=os.getenv("EXASOL_SCHEMA", "DOC_INTEL"),
         ),
-        llm_api_key=_require("GEMINI_API_KEY"),
-        extraction_model=os.getenv("EXTRACTION_MODEL", "gemini-3.6-flash"),
-        reasoning_model=os.getenv("REASONING_MODEL", "gemini-3.6-flash"),
-        chat_model=os.getenv("CHAT_MODEL", "gemini-3.6-flash"),
+        llm_api_key=llm_api_key,
+        ollama_host=os.getenv("OLLAMA_HOST", "http://localhost:11434"),
+        extraction_provider=extraction_provider,
+        extraction_model=os.getenv("EXTRACTION_MODEL", _model_default(extraction_provider)),
+        reasoning_provider=reasoning_provider,
+        reasoning_model=os.getenv("REASONING_MODEL", _model_default(reasoning_provider)),
+        chat_provider=chat_provider,
+        chat_model=os.getenv("CHAT_MODEL", _model_default(chat_provider)),
         confidence_threshold=float(os.getenv("CONFIDENCE_THRESHOLD", "0.8")),
         upload_dir=os.getenv("UPLOAD_DIR", "./data/uploads"),
     )

@@ -103,7 +103,9 @@ def extract_fields(
     silent-and-wrong otherwise).
     """
     payload = call_tool(
+        provider=settings.extraction_provider,
         api_key=settings.llm_api_key,
+        ollama_host=settings.ollama_host,
         model=settings.extraction_model,
         system_prompt=_SYSTEM_PROMPT,
         tool_name="record_extracted_fields",

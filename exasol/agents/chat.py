@@ -95,7 +95,9 @@ def ask(
     AUDIT_LOG row for this query — the query itself always runs on ro_db.
     """
     payload = call_tool(
+        provider=settings.chat_provider,
         api_key=settings.llm_api_key,
+        ollama_host=settings.ollama_host,
         model=settings.chat_model,
         system_prompt=_SYSTEM_PROMPT,
         tool_name="run_query",

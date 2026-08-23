@@ -1,0 +1,43 @@
+# Never bake real secrets into an image layer.
+.env
+.env.*
+!.env.example
+
+# Version control / editor cruft
+.git
+.gitignore
+.DS_Store
+.vscode/
+.idea/
+
+# Python cruft
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+# Runtime data — uploads are regenerated at runtime (UPLOAD_DIR), never
+# something the image itself should ship with baked-in files.
+data/uploads/
+
+# Sample/synthetic fixtures are for local dev and tests only, not needed
+# for the app to run in production — keeping them out of the image
+# context speeds up builds and keeps the image smaller. Comment these
+# two lines out if you specifically want the deployed instance to have
+# these sample files on disk (e.g. for a live demo upload picker).
+data/sample/
+data/simulated_v2/
+
+# Tests aren't needed at runtime
+tests/
+pytest.ini
+
+# Docs aren't needed at runtime
+docs/
+README.md
+
+# Anything Claude or an editor scratch-writes locally
+*.log

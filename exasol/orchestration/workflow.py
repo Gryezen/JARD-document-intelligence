@@ -19,7 +19,9 @@ from agents import extraction as extraction_agent
 from agents import ingestion as ingestion_agent
 from agents import reasoning as reasoning_agent
 from agents import relationships as relationships_agent
+from agents import report as report_agent
 from config import Settings
+from database.audit import log_event
 from database.db import Database
 from orchestration.state import set_status
 
@@ -27,6 +29,21 @@ GET_RELATED_DOCS_SQL = """
     SELECT doc_id_2 FROM DOCUMENT_RELATIONSHIPS WHERE doc_id_1 = {doc_id}
     UNION
     SELECT doc_id_1 FROM DOCUMENT_RELATIONSHIPS WHERE doc_id_2 = {doc_id}
+"""
+
+# Same idea as GET_RELATED_DOCS_SQL but only returns pairs reasoning
+# hasn't run for yet (compared_at IS NULL). compare_related_documents()
+# uses this instead of GET_RELATED_DOCS_SQL so that re-processing a
+# document — or processing both sides of a mutual relationship
+# independently — doesn't re-run (and re-call the model for) a pair
+# that's already been compared. Mirrors the dedup compare_case() already
+# had; compare_related_documents() was missing it, which is what produced
+# duplicate DISCREPANCIES/ACTIONS rows for documents with several
+# cross-references.
+GET_UNCOMPARED_RELATED_DOCS_SQL = """
+    SELECT doc_id_2 FROM DOCUMENT_RELATIONSHIPS WHERE doc_id_1 = {doc_id} AND compared_at IS NULL
+    UNION
+    SELECT doc_id_1 FROM DOCUMENT_RELATIONSHIPS WHERE doc_id_2 = {doc_id} AND compared_at IS NULL
 """
 
 # Case-scoped variant: same pair-finding as above, but also returns
@@ -71,20 +88,32 @@ def process_new_document(
 
     set_status(db, ingestion_result.doc_id, "extracting", current_status="uploaded")
 
-    fields = extraction_agent.extract_fields(
-        db, settings, doc_id=ingestion_result.doc_id, document_text=ingestion_result.text
-    )
+    # Everything past this point can throw (most commonly extraction's LLM
+    # call hitting a Gemini quota/rate-limit error — see agents/llm_client's
+    # LLMRateLimitError). Previously an exception here just bubbled up as a
+    # bare 500 and left the DOCUMENTS row stuck in 'extracting' forever,
+    # with nothing in the UI explaining why. Now it's marked 'failed' (a
+    # legal transition from 'extracting', see orchestration/state.py) before
+    # re-raising, so the document shows up correctly and 'failed' -> a
+    # future manual retry stays possible.
+    try:
+        fields = extraction_agent.extract_fields(
+            db, settings, doc_id=ingestion_result.doc_id, document_text=ingestion_result.text
+        )
 
-    # Link to other documents in the same case before the gate, so that by
-    # the time a document reaches 'reasoning' its relationships are already
-    # known and compare_case() has something to do.
-    relationships = relationships_agent.link_document(
-        db, settings, doc_id=ingestion_result.doc_id, case_id=case_id
-    )
+        # Link to other documents in the same case before the gate, so that by
+        # the time a document reaches 'reasoning' its relationships are already
+        # known and compare_case() has something to do.
+        relationships = relationships_agent.link_document(
+            db, settings, doc_id=ingestion_result.doc_id, case_id=case_id
+        )
 
-    gate_result = confidence_agent.run_confidence_gate(
-        db, doc_id=ingestion_result.doc_id, threshold=settings.confidence_threshold
-    )
+        gate_result = confidence_agent.run_confidence_gate(
+            db, doc_id=ingestion_result.doc_id, threshold=settings.confidence_threshold
+        )
+    except Exception:
+        set_status(db, ingestion_result.doc_id, "failed", current_status="extracting")
+        raise
 
     return {
         "doc_id": ingestion_result.doc_id,
@@ -101,27 +130,45 @@ def process_new_document(
 
 def compare_related_documents(db: Database, settings: Settings, doc_id: str) -> dict:
     """For a document now in 'reasoning' status, compare it against every
-    document linked via DOCUMENT_RELATIONSHIPS, draft actions for any
-    discrepancy found, and mark the document complete.
+    *not-yet-compared* document linked via DOCUMENT_RELATIONSHIPS, draft one
+    grouped action per pair for any discrepancies found, and mark the
+    document complete.
 
-    A document with no relationships defined simply has nothing to compare
-    against and moves straight to 'complete' — that's a valid outcome, not
-    an error, since not every document type has a counterpart to check
-    against (e.g. a standalone land record).
+    Only uncompared pairs are considered (GET_UNCOMPARED_RELATED_DOCS_SQL),
+    and each pair is marked compared_at immediately after — otherwise
+    processing both sides of a mutual relationship (or re-processing a
+    document) re-runs reasoning on a pair that already has a result,
+    producing duplicate discrepancies and duplicate drafted actions.
+
+    A document with no (uncompared) relationships simply has nothing left
+    to compare against and moves straight to 'complete' — that's a valid
+    outcome, not an error, since not every document type has a counterpart
+    to check against (e.g. a standalone land record).
     """
-    related_doc_ids = [r[0] for r in db.fetchall(GET_RELATED_DOCS_SQL, {"doc_id": doc_id})]
+    related_doc_ids = [r[0] for r in db.fetchall(GET_UNCOMPARED_RELATED_DOCS_SQL, {"doc_id": doc_id})]
 
     all_discrepancies = []
+    drafted_actions = []
     for related_id in related_doc_ids:
         discrepancies = reasoning_agent.compare_documents(db, settings, doc_id, related_id)
+        db.execute(MARK_PAIR_COMPARED_SQL, {"doc_a": doc_id, "doc_b": related_id})
         all_discrepancies.extend(discrepancies)
 
-    drafted_actions = []
-    for d in all_discrepancies:
-        email_id, task_id = action_agent.draft_action_for_discrepancy(
-            db, settings, discrepancy_id=d.discrepancy_id, doc_id=doc_id
-        )
-        drafted_actions.append({"discrepancy_id": d.discrepancy_id, "email_action_id": email_id, "task_action_id": task_id})
+        if discrepancies:
+            # One grouped email + one grouped task per document *pair*,
+            # not one per discrepancy — a pair with several mismatched
+            # fields should read as a single clarification request, not a
+            # flood of near-identical drafts.
+            email_id, task_id = action_agent.draft_action_for_pair(
+                db, settings, discrepancies=discrepancies, doc_id=doc_id
+            )
+            drafted_actions.append(
+                {
+                    "discrepancy_ids": [d.discrepancy_id for d in discrepancies],
+                    "email_action_id": email_id,
+                    "task_action_id": task_id,
+                }
+            )
 
     set_status(db, doc_id, "complete", current_status="reasoning")
 
@@ -166,19 +213,26 @@ def compare_case(db: Database, settings: Settings, case_id: str) -> dict:
             pending_pairs[frozenset({doc_a, doc_b})] = (doc_a, doc_b)
 
     all_discrepancies = []
+    drafted_actions = []
     for doc_a, doc_b in pending_pairs.values():
         discrepancies = reasoning_agent.compare_documents(db, settings, doc_a, doc_b)
         all_discrepancies.extend(discrepancies)
         db.execute(MARK_PAIR_COMPARED_SQL, {"doc_a": doc_a, "doc_b": doc_b})
 
-    drafted_actions = []
-    for d in all_discrepancies:
-        email_id, task_id = action_agent.draft_action_for_discrepancy(
-            db, settings, discrepancy_id=d.discrepancy_id, doc_id=d.doc_id_1
-        )
-        drafted_actions.append(
-            {"discrepancy_id": d.discrepancy_id, "email_action_id": email_id, "task_action_id": task_id}
-        )
+        if discrepancies:
+            # One grouped email + one grouped task per pair, not one per
+            # discrepancy — see compare_related_documents() for the same
+            # rationale.
+            email_id, task_id = action_agent.draft_action_for_pair(
+                db, settings, discrepancies=discrepancies, doc_id=doc_a
+            )
+            drafted_actions.append(
+                {
+                    "discrepancy_ids": [d.discrepancy_id for d in discrepancies],
+                    "email_action_id": email_id,
+                    "task_action_id": task_id,
+                }
+            )
 
     completed = []
     for doc_id, status in status_by_doc.items():
@@ -186,10 +240,31 @@ def compare_case(db: Database, settings: Settings, case_id: str) -> dict:
             set_status(db, doc_id, "complete", current_status="reasoning")
             completed.append(doc_id)
 
+    # Best-effort: refresh the case's LLM report now that reasoning/action
+    # have run. This is one extra model call, not one per document, but it
+    # still shouldn't take down an otherwise-successful comparison call if
+    # the model is rate-limited or briefly unavailable — the case's actual
+    # findings above already committed, so a report failure is logged and
+    # swallowed rather than turning a 200 into a 500 for the caller. The
+    # frontend just shows the previous report_summary (or none) until the
+    # next successful call regenerates it.
+    report_summary = None
+    try:
+        report_summary = report_agent.generate_case_report(db, settings, case_id)
+    except Exception as e:
+        log_event(
+            db,
+            agent_name="report",
+            action="report_generation_failed",
+            input_summary=f"case_id={case_id}",
+            output_summary=str(e)[:2000],
+        )
+
     return {
         "case_id": case_id,
         "pairs_compared": len(pending_pairs),
         "discrepancies_found": len(all_discrepancies),
         "actions_drafted": drafted_actions,
         "documents_completed": completed,
+        "report_summary": report_summary,
     }

@@ -37,11 +37,13 @@ DROP TABLE IF EXISTS CASES;
 -- share a case, not to the whole registry.
 -- ----------------------------------------------------------------------------
 CREATE OR REPLACE TABLE CASES (
-    case_id         VARCHAR(36)   NOT NULL,          -- UUID
-    name            VARCHAR(300)  NOT NULL,
-    created_by      VARCHAR(200),
-    created_at      TIMESTAMP     NOT NULL,
-    updated_at      TIMESTAMP     NOT NULL,
+    case_id              VARCHAR(36)   NOT NULL,          -- UUID
+    name                 VARCHAR(300)  NOT NULL,
+    created_by           VARCHAR(200),
+    created_at           TIMESTAMP     NOT NULL,
+    updated_at           TIMESTAMP     NOT NULL,
+    report_summary       VARCHAR(4000),                   -- LLM-generated plain-language summary of the case's documents
+    report_generated_at  TIMESTAMP,                        -- NULL until agents/report.py has run for this case
     CONSTRAINT PK_CASES PRIMARY KEY (case_id)
 );
 
