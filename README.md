@@ -9,11 +9,9 @@ extracts structured fields, gates on confidence, **reasons across related docume
 to catch discrepancies, drafts a next action, keeps a human in the loop, and lets
 anyone query the accumulated knowledge base in plain English — all backed by Exasol.
 
-
+## Demo video:
 
 [![JARD Demo Video](https://img.youtube.com/vi/M_TS8T7-XnE/maxresdefault.jpg)](https://youtu.be/M_TS8T7-XnE)
-
-
 
 ## Why this problem still exists
 
