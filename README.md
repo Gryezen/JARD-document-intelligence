@@ -11,7 +11,7 @@ anyone query the accumulated knowledge base in plain English — all backed by E
 
 
 
-\[!\[JARD Demo Video](https://img.youtube.com/vi/M\_TS8T7-XnE/maxresdefault.jpg)](https://youtu.be/M\_TS8T7-XnE)
+[![JARD Demo Video](https://img.youtube.com/vi/M_TS8T7-XnE/maxresdefault.jpg)](https://youtu.be/M_TS8T7-XnE)
 
 
 
